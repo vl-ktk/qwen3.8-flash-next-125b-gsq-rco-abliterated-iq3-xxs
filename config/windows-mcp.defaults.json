@@ -28,12 +28,19 @@
   "cloudflare": {
     "tunnel_name": "ktk-qwen125b-friend-pc",
     "management": "remote",
-    "public_hostname": null,
-    "public_mcp_url": null,
+    "public_hostname": "qwen125b-mcp.vl-ktk.workers.dev",
+    "public_mcp_url": "https://qwen125b-mcp.vl-ktk.workers.dev/mcp",
     "zone_id": null,
     "tunnel_id": null,
     "credential_source": "approved-device-enrollment",
-    "allow_insecure_public_access": false
+    "allow_insecure_public_access": false,
+    "route_kind": "workers_dev_vpc_service",
+    "workers_subdomain": "vl-ktk",
+    "edge_worker_name": "qwen125b-mcp",
+    "public_route_status": "planned_not_deployed",
+    "vpc_service_binding": "QWEN_MCP_ORIGIN",
+    "workers_vpc_beta": true,
+    "zone_required_for_chosen_route": false
   },
   "windows_service": {
     "service_name": "KTKQwenMCP",
