@@ -55,11 +55,11 @@ ChatGPT (MCP client)
 
 - Имя нового Worker: `qwen125b-mcp`, **только проектный выбор, не существующий сервис**. Его плановый URL: `https://qwen125b-mcp.vl-ktk.workers.dev/mcp`. **Сейчас не развернут, доступность не заявляется**.
 - Tunnel: `ktk-qwen125b-friend-pc` создан в **пункте 5** (ID `b49f90d5-3f8a-4aca-aeaf-c44c563b215c`), конфигурация управляется Cloudflare. Статус **inactive**, 0 подключений; привязку к Worker/VPC и Windows выполнять только в следующих пунктах.
-- `Workers VPC Service`: планируемая привязка `QWEN_MCP_ORIGIN`, доступ **только к конкретному локальному MCP**, не ко всей сети друга. В пункте 5/6 проверить права Connectivity Directory и рабочую поддержку данной функции на нашем аккаунте.
+- `Workers VPC Service`: **создан** `ktk-qwen125b-mcp-origin` (ID `01a1f103-bc58-78c2-97ef-91331e10775e`) → `127.0.0.1:8765` через Tunnel. Привязка `QWEN_MCP_ORIGIN` проверена через Cloudflare API. Доступ ограничен одним endpoint.
 - Никакой DNS zone ID не нужен **для выбранного Worker `workers.dev` + Workers VPC**. В JSON `zone_id: null` означает, что зона не используется, а `tunnel_id` содержит проверенный UUID созданного туннеля. Его секреты нигде не публикуются.
-- Бета-функция может измениться; на момент конфигурации Cloudflare документирует её доступность на Free и Paid Worker plans. Реальные разрешения, коннективность, SSE/Streamable HTTP и OAuth совместимость **не подтверждены**.
+- Бета-функция может измениться. Права создавать VPC Service и binding проверены успешно через Cloudflare API. Сквозная Windows-коннективность, SSE/Streamable HTTP и OAuth совместимость **не подтверждены**.
 - Cloudflare Tunnel обеспечивает транспорт, **но не заменяет** OAuth, авторизацию каждого инструмента и подтверждение владельца.
-- Отдельный Tunnel создан в пункте 5. Публичная маршрутизация Worker/VPC и HTTPS остаются в пункте 6, авторизация — пункт 7, живой тест интеграции — позднее.
+- Tunnel создан в пункте 5. Worker и ограниченный VPC Service созданы/связаны в пункте 6, `workers.dev` включён. Worker до пункта 7 возвращает 401 на любой `/mcp`, ни одной команды к Windows не направляет. Проверить внешний HTTPS-ответ из текущего окружения не удалось.
 
 Официальная документация:
 - https://developers.cloudflare.com/workers-vpc/configuration/vpc-services/
@@ -96,7 +96,7 @@ ChatGPT (MCP client)
 
 **Проверено:** документы проекта и точка восстановления GitHub; read-only Cloudflare API подтвердил аккаунт, 8 Worker Scripts и субдомен `vl-ktk.workers.dev`, при 0 DNS-зон и 0 туннелей. Из официальной документации подтверждена проектная возможность Workers VPC Service через Tunnel, без собственного домена; на фактическом компьютере ничего не тестировалось.
 
-**НЕ проверено:** точная версия Windows, реальное имя хоста, права, диски и драйвер на ПК друга; доступность порта 8765; выбранный `workers.dev` URL **ещё не существует как опубликованный Worker**, VPC Service не создан, Tunnel пока inactive и не подключён к ПК, service account/ACL, установка Windows, успешный запуск модели.
+**НЕ проверено:** точная версия Windows, реальное имя хоста, права, диски и драйвер на ПК друга; доступность порта 8765; Worker опубликован через Cloudflare API, но внешний HTTPS-запрос не проверен из-за DNS среды; VPC Service создан, Tunnel по-прежнему inactive и не подключён к ПК, service account/ACL, установка Windows, успешный запуск модели.
 
 **Итог пункта 4:** домен покупать не требуется; использован существующий Cloudflare аккаунт и выбран `workers.dev` + Workers VPC. Параметры согласованы как архитектурная конфигурация. Реальное создание и проверка должны проходить строго в пунктах 5–10. При отказе в правах на Workers VPC зафиксировать блокер в пункте 5, не обходить авторизацию и не разворачивать небезопасный публичный доступ.
 
@@ -106,3 +106,7 @@ ChatGPT (MCP client)
 - https://developers.cloudflare.com/tunnel/troubleshooting/
 - https://learn.microsoft.com/en-us/windows/win32/services/localservice-account
 - https://learn.microsoft.com/en-us/windows/desktop/Services/interactive-services
+
+## Фактическое состояние пункта 6
+
+Worker `qwen125b-mcp` опубликован с VPC binding, `workers.dev` enabled, версия `309d8a3f-ca73-439b-93fe-9a3a10d0dcd7` на 100%. Источник: `src/cloudflare/worker.mjs`, конфигурация `config/wrangler.json`; `compatibility_date=2026-11-17` принят Cloudflare. Полноценный OAuth и origin forwarding НЕ реализованы: доступ `/mcp` закрыт. Подробно: `docs/CLOUDFLARE_ROUTING.md`. Следующий пункт №7.
