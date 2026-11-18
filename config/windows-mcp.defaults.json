@@ -1,0 +1,76 @@
+{
+  "config_version": 1,
+  "project_id": "ktk-qwen125b-friendpc",
+  "device": {
+    "logical_id": "friend-pc-01",
+    "actual_windows_hostname": null,
+    "os_arch": "x64",
+    "os_version": null,
+    "existing_windows_user": true
+  },
+  "installation": {
+    "binary_directory": "%ProgramFiles%\\KTK\\Qwen125B\\MCP",
+    "data_directory": "%ProgramData%\\KTK\\Qwen125B",
+    "model_install_volume_preference": "D",
+    "model_directory": null,
+    "minimum_free_model_volume_gib": 160
+  },
+  "mcp": {
+    "bind_host": "127.0.0.1",
+    "bind_port": 8765,
+    "path": "/mcp",
+    "local_health_path": "/healthz",
+    "protocol": "streamable-http",
+    "auth_required": true,
+    "write_tools_enabled": false,
+    "privileged_tools_enabled": false
+  },
+  "cloudflare": {
+    "tunnel_name": "ktk-qwen125b-friend-pc",
+    "management": "remote",
+    "public_hostname": null,
+    "public_mcp_url": null,
+    "zone_id": null,
+    "tunnel_id": null,
+    "credential_source": "approved-device-enrollment",
+    "allow_insecure_public_access": false
+  },
+  "windows_service": {
+    "service_name": "KTKQwenMCP",
+    "display_name": "KTK Qwen 125B MCP",
+    "startup": "automatic-delayed",
+    "preferred_identity": "NT AUTHORITY\\LocalService",
+    "remote_desktop_control": false,
+    "admin_operations": "disabled-until-owner-approved-elevation-is-implemented"
+  },
+  "credentials": {
+    "stored_in_package": false,
+    "enrollment": "single-use-owner-approved",
+    "storage": "device-bound-windows-protected-store",
+    "revoke_supported": true
+  },
+  "logging": {
+    "directory": "%ProgramData%\\KTK\\Qwen125B\\Logs",
+    "retention_days": 30,
+    "max_total_size_mib": 256,
+    "utc": true,
+    "record_command_payloads": false,
+    "record_secrets": false
+  },
+  "model": {
+    "source": "SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF",
+    "quantization": "IQ3_XXS",
+    "runtime": "Strata",
+    "runtime_status": "not-validated",
+    "default_mode": "games",
+    "autostart_inference": false,
+    "max_concurrent_inference": 1,
+    "model_files_in_installer": false,
+    "context_tokens": null
+  },
+  "access_control": {
+    "default_tool_policy": "deny",
+    "privileged_action_confirmation": true,
+    "emergency_local_disable": true
+  }
+}
