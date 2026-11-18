@@ -69,3 +69,9 @@
 - Следующий пункт строго **7**, OAuth и контроль инструментов. До этого MCP остаётся заперт.
 - Для экстренного отключения нового публичного URL: Cloudflare API POST /accounts/{account_id}/workers/scripts/qwen125b-mcp/subdomain с enabled:false. Это не удаляет чужие ресурсы.
 - Исходный GitHub SHA до итоговой фиксации: `ab13697a653711612d54474a594434e10f9b3944`. Git rollback не откатывает Cloudflare deployment автоматически.
+
+## Пункт 7 — поиск исходного OAuth Worker (19.11.2026)
+- Подтверждён действующий Cloudflare Worker `instagram-mcp-oauth-test`, активная версия 38 и существующие OAuth KV и secret bindings. Это источник для переиспользования, а не повод писать всю OAuth-систему заново.
+- Исходный JS/модули **не удалось получить** текущим Cloudflare connector (только metadata), поиск GitHub кода не нашёл дубликата. Запрет на заявление о состоявшемся копировании.
+- Отчёт: `docs/OAUTH_REUSE_SOURCE.md`. Без изменений исходного Worker и секретов.
+- Шаг **7 [ ]**, новый Qwen Worker остаётся `fail-closed`. Нужен авторизованный экспорт исходников версии 38 (Cloudflare Dashboard / Wrangler) для независимой адаптации.
