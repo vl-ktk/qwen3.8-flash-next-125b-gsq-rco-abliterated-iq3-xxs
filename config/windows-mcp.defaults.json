@@ -31,7 +31,7 @@
     "public_hostname": "qwen125b-mcp.vl-ktk.workers.dev",
     "public_mcp_url": "https://qwen125b-mcp.vl-ktk.workers.dev/mcp",
     "zone_id": null,
-    "tunnel_id": null,
+    "tunnel_id": "b49f90d5-3f8a-4aca-aeaf-c44c563b215c",
     "credential_source": "approved-device-enrollment",
     "allow_insecure_public_access": false,
     "route_kind": "workers_dev_vpc_service",
@@ -40,7 +40,13 @@
     "public_route_status": "planned_not_deployed",
     "vpc_service_binding": "QWEN_MCP_ORIGIN",
     "workers_vpc_beta": true,
-    "zone_required_for_chosen_route": false
+    "zone_required_for_chosen_route": false,
+    "tunnel_state": "inactive",
+    "tunnel_remote_config": true,
+    "tunnel_created_at_utc": "2026-11-18T23:30:07.163318Z",
+    "tunnel_connection_count_at_creation": 0,
+    "tunnel_ingress_status": "unconfigured",
+    "vpc_service_status": "not_created"
   },
   "windows_service": {
     "service_name": "KTKQwenMCP",
