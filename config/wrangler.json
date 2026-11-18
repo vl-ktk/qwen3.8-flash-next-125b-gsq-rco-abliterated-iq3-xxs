@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "qwen125b-mcp",
+  "main": "src/cloudflare/worker.mjs",
+  "compatibility_date": "2026-11-19",
+  "workers_dev": true,
+  "vpc_services": [
+    {
+      "binding": "QWEN_MCP_ORIGIN",
+      "service_id": "01a1f103-bc58-78c2-97ef-91331e10775e"
+    }
+  ]
+}
