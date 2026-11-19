@@ -189,7 +189,7 @@ test("consent GET preserves same-origin Origin for browser form POST", async t =
   assert.equal(started.response.status, 200, started.html);
   // Referrer-Policy: no-referrer makes browsers send Origin: null on navigation form POSTs.
   assert.equal(started.response.headers.get("referrer-policy"), "same-origin");
-  assert.match(started.html, /<form method="post" action="\\/authorize">/);
+  assert.ok(started.html.includes('<form method="post" action="/authorize">'));
   assert.equal((await f.approve(started, {}, { origin: "null" })).status, 403);
   assert.equal((await f.approve(started)).status, 302);
 });
