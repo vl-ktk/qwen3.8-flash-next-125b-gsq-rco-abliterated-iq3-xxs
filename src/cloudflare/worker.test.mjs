@@ -530,16 +530,51 @@ test("MCP payload limits, malformed JSON, unsupported methods and host aliases n
   assert.equal((await f.mf.dispatchFetch("https://evil.test/mcp", { redirect: "manual", headers: { authorization: "Bearer " + login.access_token } })).status, 404);
   assert.equal(f.calls.length, 0);
 });
- 
+
 test("denied MCP method is auditable by name without recording request content", async t => {
   const f = await fixture(t);
   const login = await f.login();
-  const denied = await f.mcp(login.access_token, "server/discover", { private_data: "never-log-this" });
+  const denied = await f.mcp(login.access_token, "resources/read", { private_data: "never-log-this" });
   assert.equal(denied.status, 403);
   assert.deepEqual(await denied.json(), { error: "method_not_allowed" });
   const rows = await (await f.stub()).audit();
   assert.ok(rows.some(row => row.path === "/mcp" && row.status === 403
-    && row.stage === "mcp_rpc:server/discover" && row.reason === "method_not_allowed"));
+    && row.stage === "mcp_rpc:resources/read" && row.reason === "method_not_allowed"));
   assert.doesNotMatch(JSON.stringify(rows), /never-log-this|Bearer |access_token|refresh_token/);
   assert.equal(f.calls.length, 0);
+});
+
+test("MCP server/discover is permitted after OAuth and forwards modern routing headers only", async t => {
+  const f = await fixture(t);
+  const login = await f.login();
+  const response = await f.mcp(login.access_token, "server/discover", {}, {
+    "mcp-protocol-version": "2026-07-28", "mcp-method": "server/discover",
+    "cookie": "secret=do-not-forward", "x-forwarded-host": "attacker.test",
+  });
+  assert.equal(response.status, 200);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].url, "http://127.0.0.1:8765/mcp");
+  assert.equal(JSON.parse(f.calls[0].body).method, "server/discover");
+  assert.equal(f.calls[0].headers["mcp-protocol-version"], "2026-07-28");
+  assert.equal(f.calls[0].headers["mcp-method"], "server/discover");
+  for (const name of ["authorization", "cookie", "x-forwarded-host"]) assert.equal(f.calls[0].headers[name], undefined);
+  assert.ok((await (await f.stub()).audit()).some(row => row.stage === "mcp_rpc:server/discover" && row.status === 200));
+});
+
+test("modern MCP header mismatches are rejected and do not reach Windows origin", async t => {
+  const f = await fixture(t);
+  const login = await f.login();
+  assert.equal((await f.mcp(login.access_token, "server/discover", {}, { "mcp-method": "tools/call" })).status, 400);
+  assert.equal((await f.mcp(login.access_token, "tools/call", { name: "system_info" }, { "mcp-name": "file_read" })).status, 400);
+  assert.equal((await f.mcp(login.access_token, "server/discover", {}, { "mcp-name": "system_info" })).status, 400);
+  assert.equal((await f.mcp("forged", "server/discover", {}, { "mcp-method": "server/discover" })).status, 401);
+  assert.equal(f.calls.length, 0);
+});
+
+test("discovery does not invent tools if Windows origin is down", async t => {
+  const f = await fixture(t, { upstream: () => { throw new Error("Windows offline"); } });
+  const login = await f.login();
+  const response = await f.mcp(login.access_token, "server/discover", {}, { "mcp-method": "server/discover" });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "origin_unavailable" });
 });

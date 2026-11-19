@@ -128,16 +128,23 @@ export class QwenOAuthState extends DurableObject {
       if (!message || Array.isArray(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string") return json(400, { error: "invalid_request" });
       audit.method = message.method.length <= 80 && /^[a-z][a-z0-9_.-]*(?:\/[a-z][a-z0-9_.-]*)*$/.test(message.method)
         ? message.method : "nonstandard";
+      // The 2026-07-28 MCP transport carries the RPC method and (for tool
+      // calls) tool name in headers. Never forward conflicting routing hints.
+      const methodHeader = request.headers.get("mcp-method");
+      if (methodHeader && methodHeader !== message.method) return json(400, { error: "mcp_header_mismatch" });
+      const toolHeader = request.headers.get("mcp-name");
+      if (toolHeader && (message.method !== "tools/call" || toolHeader !== message.params?.name))
+        return json(400, { error: "mcp_header_mismatch" });
       if (message.method === "tools/call") {
         if (!message.params || Array.isArray(message.params) || typeof message.params.name !== "string") return json(400, { error: "invalid_request" });
         const scope = Object.hasOwn(TOOL_SCOPES, message.params?.name) ? TOOL_SCOPES[message.params.name] : null;
         if (!scope || !auth.scope.includes(scope)) return challenge("insufficient_scope", 403);
-      } else if (!["initialize", "notifications/initialized", "notifications/cancelled", "ping", "tools/list"].includes(message.method)) return json(403, { error: "method_not_allowed" });
+      } else if (!["initialize", "server/discover", "notifications/initialized", "notifications/cancelled", "ping", "tools/list"].includes(message.method)) return json(403, { error: "method_not_allowed" });
     }
     if (!this.env.QWEN_MCP_ORIGIN?.fetch) return json(503, { error: "origin_unavailable" });
     // Fixed destination and header allowlist. Never send caller credentials or claims.
     const headers = new Headers();
-    for (const name of ["accept", "content-type", "mcp-session-id", "mcp-protocol-version", "last-event-id"]) {
+    for (const name of ["accept", "content-type", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id"]) {
       if (request.headers.has(name)) headers.set(name, request.headers.get(name));
     }
     let upstream;
