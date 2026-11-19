@@ -1,0 +1,24 @@
+{
+  "worker": "instagram-mcp-oauth-test",
+  "account_id": "11e9863342745bfdb203486f289e0145",
+  "source_version_id": "9dd45b0a-0e55-4fbc-a97f-1801327daad5",
+  "source_version_number": 38,
+  "source_deployment_id": "63e07038-6e8a-4961-9009-0ecba1afae6d",
+  "retrieved_on": "2026-11-19",
+  "endpoint": "GET /accounts/{account_id}/workers/scripts/{script_name}/content/v2",
+  "source_module": "oauth.js",
+  "source_module_sha256": "54f30934870337451feb4f832744e13c1259d6b4c3b8046224127c5494e8cf2a",
+  "extracted_provider_characters": 241872,
+  "extracted_provider_sha256": "d6d795a6211a11974c9980210609e1ff60057b004f16c693853e0ff91d9500ed",
+  "vendored_sha256": "8014c399bc5fbdf4e07df8f3d121d820dbbe2984323f372d29836c065b46b88c",
+  "library": "@cloudflare/workers-oauth-provider",
+  "package_version": "unknown; identity pinned to deployed source and SHA-256",
+  "license": "MIT; see LICENSE.txt",
+  "license_source": "https://github.com/cloudflare/workers-oauth-provider/blob/main/LICENSE.txt",
+  "changes": [
+    "Select the first general provider block, before // ../generated-legacy-oauth.mjs",
+    "Remove only the unused application import of WorkerEntrypoint3 and // oauth.mjs header",
+    "Append exports of OAuthAuthorizationServer, AuthorizationError and openTransaction",
+    "No provider function bodies changed"
+  ]
+}
