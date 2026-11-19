@@ -2,7 +2,7 @@
 
 Дата: **19.11.2026**, Europe/Bucharest. Основание: [Issue #1](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/issues/1).
 
-**Актуальный статус на 19.11.2026 после разрешённого деплоя:** OAuth-код опубликован в `qwen125b-mcp` как Worker v2 `b8946e83-551d-433a-804b-6b33f920a7d2` (100%), deployment `fad59a18-3013-49ed-812f-2c8891f11c65`. Отдельный SQLite Durable Object создан. **Owner secret ещё не установлен — публичный статус `locked`; живой OAuth вход через ChatGPT и Windows origin не проверены.** Шаг 7 и ROADMAP остаются [ ]; пункты 8–24 не выполнялись. Ниже сохранён исходный исторический отчёт Codex о состоянии **до** деплоя; актуальное дополнение — в конце документа.
+**Актуальный статус на 19.11.2026 после PR #3:** OAuth-код опубликован в `qwen125b-mcp` как Worker v3 `4a2b0e5c-1d4f-46e8-b2c1-23f462064aef` (100%), deployment `6c2993ee-a0c6-4d3d-b7e1-d91ffa5e70aa`. Минимальная длина owner secret теперь 5 символов; ограничение попыток сохранено. Отдельный SQLite Durable Object создан. **Owner secret ещё не установлен — публичный статус `locked`; живой OAuth вход через ChatGPT и Windows origin не проверены.** Шаг 7 и ROADMAP остаются [ ]; пункты 8–24 не выполнялись. Ниже сохранён исходный исторический отчёт Codex о состоянии **до** деплоя; актуальное дополнение — в конце документа.
 
 ## Источник и границы
 
@@ -108,4 +108,15 @@ Read-only API перепроверил:
 **Далее:** владелец вводит новый, независимый пароль владельца (не менее 5 символов) прямо в Cloudflare secret `QWEN_OAUTH_OWNER_PASSWORD` для `qwen125b-mcp`, без пересылки в чат. Затем проверить актуальные версии, статус `protected`, OAuth discovery и реальное подключение ChatGPT. Windows MCP/туннель не готовы, поэтому полный E2E остаётся блокером пункта 7. Откат через Cloudflare deployment прежней версии, не удаляя SQLite DO; Git rollback отдельно.
 
 ### Изменение требования к паролю по решению владельца (19.11.2026)
-Минимальная длина независимого owner secret снижена с 32 до **5 символов**; пароль с 4 символами должен оставлять OAuth в `locked`. Механизм ограничения 5 неверных попыток за 15 минут не меняется. Использование ровно 5 символов даёт слабую защиту удалённого управления; более длинный фактический пароль предпочтителен. Изменение готовится к отдельной проверке и публикации; Cloudflare version v2 в этом историческом разделе отражает предыдущее состояние.
+Минимальная длина независимого owner secret снижена с 32 до **5 символов**; пароль с 4 символами должен оставлять OAuth в `locked`. Механизм ограничения 5 неверных попыток за 15 минут не меняется. Использование ровно 5 символов даёт слабую защиту удалённого управления; более длинный фактический пароль предпочтителен. Изменение проверено и опубликовано в Cloudflare v3; v2 ниже отражает предыдущее состояние.
+
+## Публикация изменения min password=5 (19.11.2026)
+
+По решению владельца код `src/cloudflare/oauth.mjs` теперь требует только **5 символов** для секретного пароля владельца; не менялись PKCE, OAuth token rotation, session gate и 5 неуспешных попыток за 15 минут.
+
+- [PR #3](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/3) MERGED, source commit `7f51544fdfecb29a55a5b0ffb58e3facddbe594d`.
+- [CI](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44503656174) SUCCESS: npm ci/check/test (22/22 PASS, включая пароль 4 = locked, 5 = protected и вход через consent), Wrangler dry-run build PASS.
+- Перед upload: версия Worker v2 `b8946e83-551d-433a-804b-6b33f920a7d2`, deployment `fad59a18-3013-49ed-812f-2c8891f11c65`, 100%.
+- После upload: Worker v3 `4a2b0e5c-1d4f-46e8-b2c1-23f462064aef`, deployment `6c2993ee-a0c6-4d3d-b7e1-d91ffa5e70aa`, 100%. DO namespace остался `162cfb67fccc40f5907b0093b7a7f944`, VPC Service остался `01a1f103-bc58-78c2-97ef-91331e10775e`; исходный Instagram OAuth Worker не менялся.
+- Cloudflare Secret `QWEN_OAUTH_OWNER_PASSWORD` отсутствует; поэтому в живом окружении OAuth всё ещё `locked`. Подтверждена публикация версии и конфигурация bindings через Cloudflare API; **позитивный OAuth вход в production не проверен**, Windows MCP не подключён.
+- Откат изменения требования: вернуть Cloudflare v2 `b8946e83-551d-433a-804b-6b33f920a7d2`. GitHub откат отдельно; не удалять DO. ROADMAP пункт 7 остаётся [ ].
