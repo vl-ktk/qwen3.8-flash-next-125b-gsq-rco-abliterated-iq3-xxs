@@ -27,6 +27,7 @@
 - `src/windows/main.mjs` готов к запуску без регистрации Windows-службы; будущий установщик подаёт секрет Ed25519 из ACL-файла, а не из архива. `tools/list` пока пуст, `tools/call` запрещён до пункта 11.
 - Локально Node 24 + Miniflare **55/55** PASS, `npm run check`, Wrangler dry-run PASS. Включён интеграционный тест edge OAuth + Ed25519 + **реальный** loopback Windows-MCP HTTP, но соединение VPC в тесте имитировано, Windows не тестировалась.
 - Подробно `docs/STEP_10_REPORT.md`. Источник — `main` после слияния PR пункта 10. **Production Cloudflare не менялся**, остаётся v11; реальный Tunnel inactive.
+- [PR #13](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/13) **MERGED**, squash commit `d8100fa71fc6fd22a43c59a26ff0860c8f9d6f39`; [GitHub CI #44567106093](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44567106093) SUCCESS (55/55). Код лежит в `main`.
 
 ## Что осталось
 - Пункт 7: полноценная сквозная проверка ChatGPT → VPC → Windows. Tunnel `ktk-qwen125b-friend-pc` пока inactive (0 соединений), Windows MCP разработан локально, но не установлен; реальное соединение отсутствует.
