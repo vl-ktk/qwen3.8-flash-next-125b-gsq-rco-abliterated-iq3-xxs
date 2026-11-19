@@ -6,8 +6,8 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test src/cloudflare/*.test.mjs",
-    "check": "node --check src/cloudflare/worker.mjs && node --check src/cloudflare/oauth.mjs && node --check src/cloudflare/storage.mjs && node --check src/cloudflare/device-pairing.mjs && node --check src/windows/device-identity.mjs && node --check src/cloudflare/vendor/oauth-provider.mjs",
+    "test": "node --test src/cloudflare/*.test.mjs src/windows/*.test.mjs",
+    "check": "node --check src/cloudflare/worker.mjs && node --check src/cloudflare/oauth.mjs && node --check src/cloudflare/storage.mjs && node --check src/cloudflare/device-pairing.mjs && node --check src/windows/device-identity.mjs && node --check src/windows/mcp-server.mjs && node --check src/windows/main.mjs && node --check src/cloudflare/vendor/oauth-provider.mjs",
     "build": "wrangler deploy --dry-run --config config/wrangler.json --outdir ../.generated/worker"
   },
   "devDependencies": {
