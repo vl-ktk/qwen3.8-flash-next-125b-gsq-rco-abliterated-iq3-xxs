@@ -6,6 +6,7 @@ import { readFile, mkdir, mkdtemp } from "node:fs/promises";
 import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";
 import { buildSync } from "esbuild";
 import { generateDeviceIdentity, signDeviceAttestation } from "../windows/device-identity.mjs";
+import { listenWindowsMcp } from "../windows/mcp-server.mjs";
 
 const testBundle = buildSync({
   entryPoints: [fileURLToPath(new URL("./test-runtime.mjs", import.meta.url))],
@@ -19,7 +20,7 @@ const password = randomBytes(32).toString("hex");
 const verifier = randomBytes(32).toString("base64url");
 const codeChallenge = createHash("sha256").update(verifier).digest("base64url");
 
-async function fixture(t, { configured = true, state = true, upstream, ownerPassword = password, persistPath, paired = true, attestation = "valid", deviceIdentity, deviceIdOverride } = {}) {
+async function fixture(t, { configured = true, state = true, upstream, originBackend, ownerPassword = password, persistPath, paired = true, attestation = "valid", deviceIdentity, deviceIdOverride } = {}) {
   const calls = [];
   const identity = deviceIdentity ?? await generateDeviceIdentity();
   const deviceId = deviceIdOverride ?? randomBytes(24).toString("base64url");
@@ -32,6 +33,7 @@ async function fixture(t, { configured = true, state = true, upstream, ownerPass
     durableObjects: state ? { QWEN_OAUTH_STATE: { className: "TestOAuthState", useSQLite: true } } : {},
     bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: ownerPassword, QWEN_OAUTH_GENERATION: "1" } : {},
     serviceBindings: { QWEN_MCP_ORIGIN: async request => {
+      if (originBackend) return originBackend(request);
       if (new URL(request.url).pathname === "/device/attest") {
         const mode = typeof attestation === "function" ? attestation(request) : attestation;
         if (mode === "unavailable") throw Error("Host offline");
@@ -801,4 +803,52 @@ test("step 9: one-time OAuth code cannot replay after Windows outage", async t =
   assert.equal((await f.mcp(token)).status, 401);
   const renewed = await f.login();
   assert.equal((await f.mcp(renewed.access_token)).status, 200);
+});
+
+test("step 10: real loopback Windows server interoperates with OAuth gateway and Ed25519 VPC proof", async t => {
+  const identity = await generateDeviceIdentity();
+  const deviceId = randomBytes(24).toString("base64url");
+  const server = await listenWindowsMcp({ port: 0, identity, deviceId });
+  t.after(async () => { if (server.listening) await new Promise(resolve => server.close(resolve)); });
+  const loopback = `http://127.0.0.1:${server.address().port}`;
+  let attests = 0;
+  let calls = 0;
+  const f = await fixture(t, {
+    deviceIdentity: identity,
+    deviceIdOverride: deviceId,
+    originBackend: async request => {
+      const path = new URL(request.url).pathname;
+      if (path === "/device/attest") attests++;
+      if (path === "/mcp") calls++;
+      // Simulate Workers VPC service binding from the actual HTTP Windows
+      // implementation, not a stubbed JSON-RPC response.
+      const copyHeaders = new Headers(request.headers);
+      copyHeaders.delete("host");
+      return fetch(loopback + path, {
+        method: request.method,
+        headers: copyHeaders,
+        ...(request.method === "POST" ? { body: await request.text() } : {}),
+      });
+    },
+  });
+  const { access_token } = await f.login();
+  const modernParams = { _meta: {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientInfo": { name: "integration-test", version: "1" },
+    "io.modelcontextprotocol/clientCapabilities": {},
+  } };
+  const modernHeaders = { accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": "server/discover" };
+  const discover = await f.mcp(access_token, "server/discover", modernParams, modernHeaders);
+  assert.equal(discover.status, 200, await discover.clone().text());
+  assert.deepEqual((await discover.json()).result.supportedVersions, ["2026-07-28", "2025-11-25"]);
+  const listed = await f.mcp(access_token, "tools/list", modernParams, { ...modernHeaders, "mcp-method": "tools/list" });
+  assert.equal(listed.status, 200, await listed.clone().text());
+  assert.deepEqual((await listed.json()).result.tools, []);
+  const initialize = await f.mcp(access_token, "initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } }, { "mcp-protocol-version": "2025-11-25", accept: "application/json, text/event-stream" });
+  assert.equal(initialize.status, 200, await initialize.clone().text());
+  const sid = initialize.headers.get("mcp-session-id");
+  assert.match(sid, /^[A-Za-z0-9_-]{32}$/);
+  assert.equal((await f.send("/mcp", { method: "DELETE", headers: { authorization: `Bearer ${access_token}`, "mcp-session-id": sid } })).status, 204);
+  assert.equal(attests, 4);
+  assert.equal(calls, 4);
 });
