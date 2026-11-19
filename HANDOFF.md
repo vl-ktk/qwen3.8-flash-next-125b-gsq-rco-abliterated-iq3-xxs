@@ -2,7 +2,7 @@
 
 Дата: 2026-11-19.
 
-**Актуально после реализации по Issue #1:** исходный JS OAuth Worker v38 получен через read-only API; блокер экспорта снят. Независимая реализация Qwen подготовлена в Git, 21/21 локальных интеграционных тестов PASS. **Cloudflare не изменялся; пункт 7 всё ещё [ ] до живой приёмки ChatGPT.** Подробности и ограничения: `docs/STEP_7_REPORT.md`; происхождение кода: `docs/OAUTH_REUSE_SOURCE.md`. Старые разделы ниже описывают исторические этапы.
+**Актуально после разрешённой публикации пункта 7 (19.11.2026):** OAuth-код из PR #2 (merge `e5f5a67966ec4aa59d00e2c623e952353e3b8284`) опубликован только в `qwen125b-mcp`: Cloudflare Worker v2 `b8946e83-551d-433a-804b-6b33f920a7d2`, deployment `fad59a18-3013-49ed-812f-2c8891f11c65` (100%). Отдельный SQLite DO `QWEN_OAUTH_STATE` создан, `QWEN_MCP_ORIGIN` сохранён. **Секрет владельца ещё не установлен, публичный статус `locked`; `/mcp` без токена отклонён. Пункт 7 остаётся [ ] до реального входа через ChatGPT и доступности Windows MCP.** Предыдущий Worker v1 `309d8a3f-ca73-439b-93fe-9a3a10d0dcd7`, deployment `52f78262-bc33-43e2-af8e-f6a5c215b812` сохранён для отката. Подробности: `docs/STEP_7_REPORT.md`. Разделы ниже включают историческое состояние до этой публикации.
 
 **Источник истины:** приватный репозиторий `vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs`, ветка `main`.
 
@@ -87,3 +87,11 @@
 - **Пункт 7 не закрывать:** фактический ChatGPT connector и Windows origin не проверены. Деплой запрещён до отдельного разрешения; новый owner secret и облачный DO не создавались. Текущий опубликованный Qwen Worker всё ещё версия `309d8a3f-ca73-439b-93fe-9a3a10d0dcd7` и заперт. Не переходить к шагу 8 автоматически.
 - Исходный OAuth Worker v38 / deployment `63e07038-6e8a-4961-9009-0ecba1afae6d` не изменён. Все обращения Cloudflare — GET, без чтения значений KV/секретов. Новых платежей и изменений других репозиториев нет.
 - Для локального отката использовать базу выше или revert PR. Это не меняет Cloudflare; при последующем разрешённом деплое отдельно сохранять предыдущую Worker version и учитывать состояние DO. Секрет не помещать в Git/чат/установщик.
+
+## Пункт 7 — публикация OAuth-кода в Cloudflare (19.11.2026)
+- Владелец отдельно разрешил настройку и публикацию Qwen OAuth. Перед upload перепроверен deployment v1 `52f78262-bc33-43e2-af8e-f6a5c215b812`, version `309d8a3f-ca73-439b-93fe-9a3a10d0dcd7` (100%).
+- Загружены четыре ES module файла из актуального GitHub main; в метаданных сохранены совместимость 2026-11-17 и VPC binding. Применена `new_sqlite_classes` миграция `qwen-oauth-v1` для нового `QwenOAuthState`.
+- Cloudflare GET после upload подтверждает Qwen Worker v2 `b8946e83-551d-433a-804b-6b33f920a7d2` (100%), deployment `fad59a18-3013-49ed-812f-2c8891f11c65`, DO namespace `162cfb67fccc40f5907b0093b7a7f944`, `QWEN_OAUTH_GENERATION=1`, сохранённый VPC service ID `01a1f103-bc58-78c2-97ef-91331e10775e`. Старый Instagram OAuth Worker не изменялся.
+- Новый `QWEN_OAUTH_OWNER_PASSWORD` не установлен и не записан в Git/чат. Реальная браузерная проверка `https://qwen125b-mcp.vl-ktk.workers.dev/__edge_status` вернула `state: locked`; OAuth discovery — `authorization_not_configured`; `/mcp` без Bearer — `invalid_token`. Локальный curl из рабочей среды тайм-аут; успешна проверка через подключённый Chrome. Реальный OAuth consent/token и Windows origin не проверялись.
+- Следующее действие: владелец устанавливает отдельный owner password длиной не менее 32 символов напрямую в Cloudflare Secret `QWEN_OAUTH_OWNER_PASSWORD` для `qwen125b-mcp`, затем проверяются новый deployment, OAuth discovery и реальная авторизация ChatGPT. Без доступного Windows MCP сквозной upstream остаётся непроверенным. **Пункт 7 пока [ ].**
+- Откат: вернуть на 100% Cloudflare version `309d8a3f-ca73-439b-93fe-9a3a10d0dcd7`; откат GitHub и Cloudflare независимы. При появлении OAuth grants не удалять DO без явного согласия.
