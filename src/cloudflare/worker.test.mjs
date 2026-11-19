@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { readFile, mkdir, mkdtemp } from "node:fs/promises";
 import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";
 import { buildSync } from "esbuild";
+import { generateDeviceIdentity, signDeviceAttestation } from "../windows/device-identity.mjs";
 
 const testBundle = buildSync({
   entryPoints: [fileURLToPath(new URL("./test-runtime.mjs", import.meta.url))],
@@ -18,8 +19,10 @@ const password = randomBytes(32).toString("hex");
 const verifier = randomBytes(32).toString("base64url");
 const codeChallenge = createHash("sha256").update(verifier).digest("base64url");
 
-async function fixture(t, { configured = true, state = true, upstream, ownerPassword = password, persistPath } = {}) {
+async function fixture(t, { configured = true, state = true, upstream, ownerPassword = password, persistPath, paired = true, attestation = "valid", deviceIdentity, deviceIdOverride } = {}) {
   const calls = [];
+  const identity = deviceIdentity ?? await generateDeviceIdentity();
+  const deviceId = deviceIdOverride ?? randomBytes(24).toString("base64url");
   const mf = new Miniflare({
     ...convertV4MiniflareOptions({
     name: "qwen-test", modules: true,
@@ -29,6 +32,12 @@ async function fixture(t, { configured = true, state = true, upstream, ownerPass
     durableObjects: state ? { QWEN_OAUTH_STATE: { className: "TestOAuthState", useSQLite: true } } : {},
     bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: ownerPassword, QWEN_OAUTH_GENERATION: "1" } : {},
     serviceBindings: { QWEN_MCP_ORIGIN: async request => {
+      if (new URL(request.url).pathname === "/device/attest") {
+        if (attestation === "unavailable") throw Error("Host offline");
+        if (attestation === "forged") return Response.json({ device_id: deviceId, signature: randomBytes(64).toString("base64url") });
+        if (attestation === "replayed") return Response.json(await signDeviceAttestation(identity, { issuer: target, device_id: deviceId, nonce: "A".repeat(43) }));
+        return Response.json(await signDeviceAttestation(identity, { issuer: target, device_id: request.headers.get("x-qwen-device-id"), nonce: request.headers.get("x-qwen-device-nonce") }));
+      }
       const body = await request.text();
       calls.push({ url: request.url, method: request.method, headers: Object.fromEntries(request.headers), body });
       if (upstream) return upstream(request, body);
@@ -40,6 +49,7 @@ async function fixture(t, { configured = true, state = true, upstream, ownerPass
   t.after(close);
   const send = (path, init) => mf.dispatchFetch(target + path, { redirect: "manual", ...init });
   const stub = async () => (await mf.getDurableObjectNamespace("QWEN_OAUTH_STATE")).getByName("qwen125b-oauth-v1");
+  if (state && paired) await (await stub()).provisionTestDevice({ device_id: deviceId, public_key: identity.public_key, label: "Test Windows" });
   const register = async (extra = {}) => {
     const response = await send("/oauth/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ redirect_uris: [redirect], client_name: "Test client", token_endpoint_auth_method: "none", ...extra }) });
     assert.equal(response.status, 201, await response.clone().text());
@@ -81,7 +91,7 @@ async function fixture(t, { configured = true, state = true, upstream, ownerPass
     method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + token, ...headers },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
-  return { mf, calls, send, register, begin, approve, code, token, login, mcp, stub, close };
+  return { mf, calls, send, register, begin, approve, code, token, login, mcp, stub, close, identity, deviceId };
 }
 
 test("original unprovisioned gateway remains locked, including forged credentials", async t => {
@@ -577,4 +587,111 @@ test("discovery does not invent tools if Windows origin is down", async t => {
   const response = await f.mcp(login.access_token, "server/discover", {}, { "mcp-method": "server/discover" });
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: "origin_unavailable" });
+});
+
+const formProof = html => /name="proof" value="([A-Za-z0-9_-]{43})"/.exec(html)?.[1];
+async function deviceForm(f, fields, headers = {}) {
+  const page = await f.send("/device/pair/manage");
+  assert.equal(page.status, 200);
+  const proof = formProof(await page.text());
+  assert.ok(proof);
+  return f.send("/device/pair/manage", { method: "POST", headers: {
+    "content-type": "application/x-www-form-urlencoded", "origin": target, "sec-fetch-site": "same-origin", ...headers,
+  }, body: new URLSearchParams({ proof, password, ...fields }).toString() });
+}
+const pairStart = (f, identity, label = "Windows Test") => f.send("/device/pair/start", {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ public_key: identity.public_key, label }),
+});
+
+test("device pairing demands owner approval, fingerprint and proof of Ed25519 possession", async t => {
+  const f = await fixture(t, { paired: false });
+  const own = await f.login();
+  assert.deepEqual(await (await f.mcp(own.access_token)).json(), { error: "device_not_paired" });
+  assert.equal(f.calls.length, 0);
+  const startedResponse = await pairStart(f, f.identity);
+  assert.equal(startedResponse.status, 201, await startedResponse.clone().text());
+  const started = await startedResponse.json();
+  assert.match(started.request_id, /^[A-Za-z0-9_-]{32}$/);
+  assert.match(started.user_code, /^[A-HJ-NP-Z2-9]{10}$/);
+  assert.match(started.fingerprint, /^[A-F0-9]{16}$/);
+  assert.equal(started.fingerprint, f.identity.fingerprint);
+  const poll = async () => f.send("/device/pair/status", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request_id: started.request_id }) });
+  assert.deepEqual(await (await poll()).json(), { state: "pending" });
+  const approve = { action: "approve", code: started.user_code, fingerprint: started.fingerprint };
+  const wrongFp = await deviceForm(f, { ...approve, fingerprint: "F".repeat(16) });
+  assert.equal(wrongFp.status, 403);
+  assert.deepEqual(await (await poll()).json(), { state: "pending" });
+  const correct = await deviceForm(f, approve);
+  assert.equal(correct.status, 200, await correct.clone().text());
+  const bound = await (await poll()).json();
+  assert.equal(bound.state, "approved");
+  assert.match(bound.device_id, /^[A-Za-z0-9_-]{32}$/);
+  assert.equal((await f.mcp(own.access_token)).status, 200);
+  assert.equal(f.calls.length, 1);
+  const replay = await deviceForm(f, approve);
+  assert.equal(replay.status, 403);
+  const revoke = await deviceForm(f, { action: "revoke", device_id: bound.device_id, code: "", fingerprint: "" });
+  assert.equal(revoke.status, 200);
+  assert.deepEqual(await (await f.mcp(own.access_token)).json(), { error: "device_not_paired" });
+  assert.equal(f.calls.length, 1);
+  const audit = await (await f.stub()).audit();
+  assert.doesNotMatch(JSON.stringify(audit), new RegExp(started.request_id));
+  assert.doesNotMatch(JSON.stringify(audit), new RegExp(started.user_code));
+  assert.doesNotMatch(JSON.stringify(audit), /private_pkcs8|access_token/);
+});
+
+test("pairing management blocks forged origins, CSRF replay and incorrect owner password", async t => {
+  const f = await fixture(t, { paired: false });
+  const browser = await f.send("/device/pair/manage");
+  assert.equal(browser.headers.get("referrer-policy"), "same-origin");
+  assert.equal(browser.headers.get("content-security-policy"), "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  const started = await (await pairStart(f, f.identity)).json();
+  const approve = { action: "approve", code: started.user_code, fingerprint: started.fingerprint };
+  assert.equal((await deviceForm(f, approve, { origin: "https://evil.test" })).status, 403);
+  assert.equal((await deviceForm(f, approve, { "sec-fetch-site": "cross-site" })).status, 403);
+  assert.equal((await deviceForm(f, { ...approve, password: "wrong" })).status, 403);
+  const before = await f.send("/device/pair/manage");
+  const proof = formProof(await before.text());
+  const headers = { "content-type": "application/x-www-form-urlencoded", origin: target, "sec-fetch-site": "same-origin" };
+  const input = new URLSearchParams({ proof, password, ...approve });
+  assert.equal((await f.send("/device/pair/manage", { method: "POST", headers, body: input.toString() })).status, 200);
+  assert.equal((await f.send("/device/pair/manage", { method: "POST", headers, body: input.toString() })).status, 403);
+  assert.equal((await f.send("/device/pair/manage", { method: "POST", headers, body: new URLSearchParams({ ...approve, proof: "A".repeat(43), password }).toString() })).status, 403);
+});
+
+test("public device pairing resists bad input, wrong IDs and expired pending records", async t => {
+  const f = await fixture(t, { paired: false });
+  assert.equal((await f.send("/device/pair/start", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ public_key: "bad", label: "Test" }) })).status, 400);
+  assert.equal((await pairStart(f, f.identity, "<script>bad</script>")).status, 400);
+  assert.equal((await f.send("/device/pair/status", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request_id: "bad" }) })).status, 400);
+  assert.equal((await f.send("/device/pair/manage?code=secret")).status, 400);
+  const started = await (await pairStart(f, f.identity)).json();
+  await (await f.stub()).expire("device:pending:");
+  const poll = await f.send("/device/pair/status", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request_id: started.request_id }) });
+  assert.equal(poll.status, 404);
+  assert.equal((await deviceForm(f, { action: "approve", code: started.user_code, fingerprint: started.fingerprint })).status, 403);
+});
+
+test("device proof rejects forged signatures, replayed challenges and offline Windows without forwarding", async t => {
+  for (const attestation of ["forged", "replayed", "unavailable"]) {
+    const f = await fixture(t, { attestation });
+    const login = await f.login();
+    const response = await f.mcp(login.access_token, "server/discover", {});
+    assert.equal(response.status, 503, attestation);
+    assert.equal(f.calls.length, 0, attestation);
+  }
+});
+
+test("approved Ed25519 identity survives Durable Object SQLite restart without re-pairing", async t => {
+  const persistPath = await mkdtemp("/tmp/qwen-device-sqlite-");
+  const first = await fixture(t, { paired: false, persistPath });
+  const started = await (await pairStart(first, first.identity)).json();
+  assert.equal((await deviceForm(first, { action: "approve", code: started.user_code, fingerprint: started.fingerprint })).status, 200);
+  const polled = await first.send("/device/pair/status", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request_id: started.request_id }) });
+  const device = await polled.json();
+  await first.close();
+  const next = await fixture(t, { paired: false, persistPath, deviceIdentity: first.identity, deviceIdOverride: device.device_id });
+  const login = await next.login();
+  assert.equal((await next.mcp(login.access_token)).status, 200);
 });
