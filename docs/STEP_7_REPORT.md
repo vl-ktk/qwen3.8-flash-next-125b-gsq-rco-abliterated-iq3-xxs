@@ -2,7 +2,7 @@
 
 Дата: **19.11.2026**, Europe/Bucharest. Основание: [Issue #1](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/issues/1).
 
-**Актуальный статус на 19.11.2026 после настройки владельцем Cloudflare Secret:** активна версия `qwen125b-mcp` **`3e6fee92-a2bf-476f-8f86-c8c6b9b8f41a`** (100%), deployment **`04507195-c5d1-4e32-81a8-463f15d6d7c1`**. Cloudflare API подтвердил, что `QWEN_OAUTH_OWNER_PASSWORD` имеет **тип `secret_text`**; значения пароля не читались. Изолированный SQLite Durable Object и VPC Service binding не изменены. Живой браузерный smoke-test подтвердил `protected` на `__edge_status`, корректный OAuth discovery и отказ `invalid_token` для `/mcp` без Bearer. **ChatGPT OAuth consent/code/token и Windows MCP origin пока не проверены — ROADMAP шаг 7 [ ], пункты 8–24 [ ].** Исторические разделы документа ниже относятся к ранним версиям; новые подробности в дополнении в конце.
+**Актуальный статус после исправления ChatGPT OAuth consent (19.11.2026):** Worker **v6 `1a90b1b6-1bb3-4e0a-b48d-705395bf2149`**, deployment **`9f53720f-17b5-4d68-afef-2cc61cdbebdb`** (100%). Ошибка `invalid_origin` возникала **после** отправки пароля из браузерной формы; `Referrer-Policy: no-referrer` заменён на `same-origin` (без ослабления строгой проверки Origin/PKCE). [PR #4](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/4), main `3814c994a5df8e4414a7bf8c387277c167316acd`; [CI 44511720844](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44511720844) PASS: 23/23 теста, npm ci/check/build. Пароль остался binding `secret_text` без чтения его значения; DO/VPC сохранены. Live Chrome: `protected`, OAuth discovery, `invalid_token` без Bearer — PASS. **Повторный живой ChatGPT consent → code/token после фикса пока не проходили, Windows MCP origin ещё не готов: пункт 7 [ ], далее 8–24 [ ].** Предыдущие статусы ниже исторические; подробности в последнем разделе.
 
 ## Источник и границы
 
@@ -140,3 +140,28 @@ Read-only API перепроверил:
 **История версий / откат:** до установки `secret_text` работала dashboard v4 `f84c4b6d-5769-49b9-ae73-b87c5130e396`, deployment `c4b0fb29-ba90-4298-b46c-f35a3af0fb51`, с временным binding `plain_text` — её **не следует выбирать для отката**. Аварийный fail-closed откат на код v3 `4a2b0e5c-1d4f-46e8-b2c1-23f462064aef`, deployment `6c2993ee-a0c6-4d3d-b7e1-d91ffa5e70aa`; проверить его bindings после rollback, не удалять SQLite DO. Cloudflare и Git rollback независимы.
 
 **Следующий шаг:** вручную добавить приватный MCP connector ChatGPT, URL `https://qwen125b-mcp.vl-ktk.workers.dev/mcp` и выполнить реальную авторизацию. Пока Windows MCP не разработан и Tunnel inactive, попытки вызвать модель закономерно не подтвердят работоспособность сквозной системы. Шаг 7 не закрывать.
+
+## Публикация v6 — исправлен `invalid_origin` после пароля (19.11.2026)
+
+**Симптом и точная причина:** пользователь зарегистрировал MCP в ChatGPT, дошёл до owner password и после отправки HTML consent формы на `/authorize` получил `{"error":"invalid_origin"}`. В ответе на consent GET сервер отправлял `Referrer-Policy: no-referrer`; браузер для same-origin `method=post` под этой политикой мог отправить `Origin: null`. Код POST сравнивал Origin только с `https://qwen125b-mcp.vl-ktk.workers.dev` и отказывал. В `src/cloudflare/oauth.mjs` заголовок изменён на `same-origin`, чтобы браузер формировал ожидаемый Origin. Проверка Origin остаётся обязательной; `Origin: null` и чужой Origin по-прежнему возвращают 403. Тест в `src/cloudflare/worker.test.mjs` проверяет header, consent form, отказ `Origin: null` и принятие корректного Origin.
+
+**Исходник:** [PR #4](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/4) MERGED, commit `main` `3814c994a5df8e4414a7bf8c387277c167316acd`. **Проверки:** [CI run 44511720844](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44511720844) job `edge` SUCCESS: `npm ci` PASS, `npm run check` PASS, `npm test` **23/23 PASS**, `npm run build` PASS (Wrangler dry-run). Проверено по GitHub Actions job/logs. Ручной Windows MCP не тестировался.
+
+**Преддеплой:** активный Worker v5 `3e6fee92-a2bf-476f-8f86-c8c6b9b8f41a` 100%, deployment `04507195-c5d1-4e32-81a8-463f15d6d7c1`. В Cloudflare загружены четыре source modules из GitHub main в отдельную неактивную **v6**; binding inherit strict. Ответ Cloudflare `versions/{id}` подтвердил:
+
+| Binding | Тип/ресурс после inherit |
+|---|---|
+| `QWEN_OAUTH_OWNER_PASSWORD` | `secret_text` (значение не читали/не записывали) |
+| `QWEN_OAUTH_STATE` | `durable_object_namespace`, `QwenOAuthState`, `162cfb67fccc40f5907b0093b7a7f944` |
+| `QWEN_MCP_ORIGIN` | `vpc_service`, `01a1f103-bc58-78c2-97ef-91331e10775e` |
+| `QWEN_OAUTH_GENERATION` | `plain_text`, сохранён прежний binding |
+
+**Непосредственно перед публикацией** заново проверено, что Cloudflare deployment всё ещё v5. Затем выложена **v6 `1a90b1b6-1bb3-4e0a-b48d-705395bf2149` на 100%**; deployment **`9f53720f-17b5-4d68-afef-2cc61cdbebdb`** (API, 11:10 UTC). После публикации Cloudflare GET deployments/settings подтвердил версию и все bindings. Публичный Chrome GET:
+
+- `/__edge_status` → `{"state":"protected","endpoint":"mcp"}`;
+- `/.well-known/oauth-authorization-server` → верные issuer/authorization/token/register/PKCE S256/scopes;
+- `/mcp` без Bearer → `{"error":"invalid_token"}`.
+
+**Чего ещё не проверяли:** живой повторный browser POST consent с владельческим паролем, получение authorization code и token реальным коннектором ChatGPT; связь Worker→Tunnel→Windows MCP отсутствует. Эти проверки не заменяются 23 локальными интеграционными тестами. Пункт ROADMAP 7 остаётся открытым. Следующее действие — заново пройти подключение ChatGPT по `https://qwen125b-mcp.vl-ktk.workers.dev/mcp`; **пароль менять не нужно**. Если подключение пройдёт, отдельно проверить вызов инструмента с учётом недоступного Windows upstream.
+
+**Откат:** выбрать Cloudflare версию **v5 `3e6fee92-a2bf-476f-8f86-c8c6b9b8f41a`** на 100%, предыдущий deployment `04507195-c5d1-4e32-81a8-463f15d6d7c1`. v5 сохраняет дефект Origin. v4 `f84c4b6d-5769-49b9-ae73-b87c5130e396` не использовать: в её истории был небезопасный `plain_text` binding. Не удалять DO, secrets и VPC; GitHub rollback отдельно.
