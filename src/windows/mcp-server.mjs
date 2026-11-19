@@ -1,15 +1,16 @@
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import { signDeviceAttestation } from "./device-identity.mjs";
+import { createWindowsToolRegistry } from "./windows-tools.mjs";
 
 // This is the loopback transport, not a remotely exposed HTTP service. The
 // Cloudflare gateway enforces OAuth + scopes and a fresh signed device proof.
-// No Windows commands or file access are registered at this stage.
+// Only read-only, parameter-validated Windows tools are registered in step 11.
 const MODERN = "2026-07-28";
 const LEGACY = "2025-11-25";
 const SUPPORTED = [MODERN, LEGACY];
-const SERVER_INFO = Object.freeze({ name: "qwen125b-windows-mcp", version: "0.10.0" });
-const INSTRUCTIONS = "Windows management tools are disabled until the approved allowlist is installed.";
+const SERVER_INFO = Object.freeze({ name: "qwen125b-windows-mcp", version: "0.11.0" });
+const INSTRUCTIONS = "Read-only Windows tools only. No arbitrary PowerShell, writes, process controls or service changes. File read requires configured allowlisted directories.";
 const MAX_BODY = 64 * 1024;
 const SESSION_TTL = 24 * 60 * 60 * 1000;
 const MAX_SESSIONS = 256;
@@ -65,7 +66,7 @@ function requireMeta(body, req) {
   return client === undefined || (record(client) && typeof client.name === "string" && typeof client.version === "string");
 }
 
-export function createWindowsMcpServer({ port = 8765, host = "127.0.0.1", identity = null, deviceId = null } = {}) {
+export function createWindowsMcpServer({ port = 8765, host = "127.0.0.1", identity = null, deviceId = null, toolRegistry = createWindowsToolRegistry() } = {}) {
   // Do not let configuration expose this origin on a LAN. Tunnel connects to loopback.
   if (host !== "127.0.0.1" || !Number.isInteger(port) || port < 0 || port > 65535) throw Error("invalid_bind_address");
   const sessions = new Map();
@@ -182,15 +183,24 @@ export function createWindowsMcpServer({ port = 8765, host = "127.0.0.1", identi
       if (body.method === "ping" && !modern) return send(res, 200, rpcResult(id, {}));
       if (body.method === "tools/list") {
         if (body.params?.cursor) return send(res, 400, rpcError(id, -32602, "Invalid cursor"));
-        return send(res, 200, rpcResult(id, modern ? metaResult({ tools: [], cacheScope: "private", ttlMs: 0 }) : { tools: [] }));
+        const result = { tools: toolRegistry.list() };
+        return send(res, 200, rpcResult(id, modern ? metaResult({ ...result, cacheScope: "private", ttlMs: 0 }) : result));
       }
       if (body.method === "tools/call") {
         if (!record(body.params) || typeof body.params.name !== "string" || !record(body.params.arguments ?? {})) {
           return send(res, 400, rpcError(id, -32602, "Invalid tool parameters"));
         }
-        // No actual tools are exposed until steps 11-14 implement a reviewed
-        // registry, parameter schemas, confirmation and least privilege.
-        return send(res, 400, rpcError(id, -32602, "Unknown or disabled tool"));
+        if (!toolRegistry.has(body.params.name)) return send(res, 400, rpcError(id, -32602, "Unknown or disabled tool"));
+        try {
+          const output = await toolRegistry.call(body.params.name, body.params.arguments ?? {});
+          const result = { content: [{ type: "text", text: JSON.stringify(output) }], isError: false };
+          return send(res, 200, rpcResult(id, modern ? metaResult(result) : result));
+        } catch (error) {
+          if (error?.code === "invalid_arguments") return send(res, 400, rpcError(id, -32602, "Invalid tool arguments"));
+          // Never send child-process stderr, file contents or stack traces.
+          const result = { content: [{ type: "text", text: "Tool execution unavailable or denied" }], isError: true };
+          return send(res, 200, rpcResult(id, modern ? metaResult(result) : result));
+        }
       }
       return send(res, modern ? 404 : 400, rpcError(id, -32601, "Method not found"));
     } catch {
