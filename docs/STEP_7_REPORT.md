@@ -2,7 +2,7 @@
 
 Дата: **19.11.2026**, Europe/Bucharest. Основание: [Issue #1](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/issues/1).
 
-**Актуальный статус на 19.11.2026 после PR #3:** OAuth-код опубликован в `qwen125b-mcp` как Worker v3 `4a2b0e5c-1d4f-46e8-b2c1-23f462064aef` (100%), deployment `6c2993ee-a0c6-4d3d-b7e1-d91ffa5e70aa`. Минимальная длина owner secret теперь 5 символов; ограничение попыток сохранено. Отдельный SQLite Durable Object создан. **Owner secret ещё не установлен — публичный статус `locked`; живой OAuth вход через ChatGPT и Windows origin не проверены.** Шаг 7 и ROADMAP остаются [ ]; пункты 8–24 не выполнялись. Ниже сохранён исходный исторический отчёт Codex о состоянии **до** деплоя; актуальное дополнение — в конце документа.
+**Актуальный статус на 19.11.2026 после настройки владельцем Cloudflare Secret:** активна версия `qwen125b-mcp` **`3e6fee92-a2bf-476f-8f86-c8c6b9b8f41a`** (100%), deployment **`04507195-c5d1-4e32-81a8-463f15d6d7c1`**. Cloudflare API подтвердил, что `QWEN_OAUTH_OWNER_PASSWORD` имеет **тип `secret_text`**; значения пароля не читались. Изолированный SQLite Durable Object и VPC Service binding не изменены. Живой браузерный smoke-test подтвердил `protected` на `__edge_status`, корректный OAuth discovery и отказ `invalid_token` для `/mcp` без Bearer. **ChatGPT OAuth consent/code/token и Windows MCP origin пока не проверены — ROADMAP шаг 7 [ ], пункты 8–24 [ ].** Исторические разделы документа ниже относятся к ранним версиям; новые подробности в дополнении в конце.
 
 ## Источник и границы
 
@@ -120,3 +120,23 @@ Read-only API перепроверил:
 - После upload: Worker v3 `4a2b0e5c-1d4f-46e8-b2c1-23f462064aef`, deployment `6c2993ee-a0c6-4d3d-b7e1-d91ffa5e70aa`, 100%. DO namespace остался `162cfb67fccc40f5907b0093b7a7f944`, VPC Service остался `01a1f103-bc58-78c2-97ef-91331e10775e`; исходный Instagram OAuth Worker не менялся.
 - Cloudflare Secret `QWEN_OAUTH_OWNER_PASSWORD` отсутствует; поэтому в живом окружении OAuth всё ещё `locked`. Подтверждена публикация версии и конфигурация bindings через Cloudflare API; **позитивный OAuth вход в production не проверен**, Windows MCP не подключён.
 - Откат изменения требования: вернуть Cloudflare v2 `b8946e83-551d-433a-804b-6b33f920a7d2`. GitHub откат отдельно; не удалять DO. ROADMAP пункт 7 остаётся [ ].
+
+
+## Дополнение — Secret подтверждён и публичные OAuth адреса проверены (19.11.2026)
+
+| Объект/проверка | Подтверждено |
+|---|---|
+| Активная Worker version | `3e6fee92-a2bf-476f-8f86-c8c6b9b8f41a`, 100% |
+| Deployment | `04507195-c5d1-4e32-81a8-463f15d6d7c1` (dashboard, 19.11.2026 10:29:27 UTC) |
+| Пароль владельца | `QWEN_OAUTH_OWNER_PASSWORD` существует как **Cloudflare `secret_text`**, значение не извлекалось |
+| Durable Object | `QWEN_OAUTH_STATE` → namespace `162cfb67fccc40f5907b0093b7a7f944` |
+| VPC origin | `QWEN_MCP_ORIGIN` → `01a1f103-bc58-78c2-97ef-91331e10775e` |
+| Live `/__edge_status` | `{"state":"protected","endpoint":"mcp"}` |
+| Live `/.well-known/oauth-authorization-server` | issuer Qwen, authorization `/authorize`, token `/oauth/token`, registration `/oauth/register`, resource `/mcp`, grant `authorization_code`/`refresh_token`, PKCE `S256` |
+| Live `/mcp` без Authorization | `{"error":"invalid_token"}` |
+
+**Проверки:** metadata Cloudflare API и публичные GET в подключённом Chrome. В этой операции код, CI, payload OAuth или Windows origin не менялись. Не проверены фактические DCR registration, ввод владельцем пароля на OAuth consent, PKCE exchange, действующий токен, ChatGPT connector, работа upstream. `protected` означает только действующую конфигурацию, а не сквозной MCP.
+
+**История версий / откат:** до установки `secret_text` работала dashboard v4 `f84c4b6d-5769-49b9-ae73-b87c5130e396`, deployment `c4b0fb29-ba90-4298-b46c-f35a3af0fb51`, с временным binding `plain_text` — её **не следует выбирать для отката**. Аварийный fail-closed откат на код v3 `4a2b0e5c-1d4f-46e8-b2c1-23f462064aef`, deployment `6c2993ee-a0c6-4d3d-b7e1-d91ffa5e70aa`; проверить его bindings после rollback, не удалять SQLite DO. Cloudflare и Git rollback независимы.
+
+**Следующий шаг:** вручную добавить приватный MCP connector ChatGPT, URL `https://qwen125b-mcp.vl-ktk.workers.dev/mcp` и выполнить реальную авторизацию. Пока Windows MCP не разработан и Tunnel inactive, попытки вызвать модель закономерно не подтвердят работоспособность сквозной системы. Шаг 7 не закрывать.
