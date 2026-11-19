@@ -211,6 +211,51 @@ test("ChatGPT two-scope browser consent grants a code with an explicit submit bu
   assert.equal(new URL(response.headers.get("location")).searchParams.get("state"), "unpredictable-client-state");
 });
 
+test("cookie-blocked Chrome form uses same-origin one-time proof for ChatGPT OAuth", async t => {
+  const f = await fixture(t);
+  const client = await f.register();
+  const started = await f.begin(client, { scope: "qwen:read qwen:files:read" });
+  const formProof = /name="form_proof" value="([a-f0-9]{64})"/.exec(started.html)?.[1];
+  assert.match(formProof ?? "", /^[a-f0-9]{64}$/);
+  const submitted = new URLSearchParams([
+    ["handle", started.handle], ["form_proof", formProof],
+    ["scope", "qwen:read"], ["scope", "qwen:files:read"],
+    ["password", password], ["decision", "approve"],
+  ]);
+  const options = {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: target,
+      "sec-fetch-site": "same-origin" },
+    body: submitted.toString(), // Deliberately no Cookie header: reproduce real Chrome failure.
+  };
+  const approved = await f.send("/authorize", options);
+  assert.equal(approved.status, 302, await approved.clone().text());
+  const authCode = new URL(approved.headers.get("location")).searchParams.get("code");
+  const token = await f.token(client, authCode);
+  assert.equal(token.status, 200, await token.clone().text());
+  assert.ok((await token.json()).access_token);
+  const replay = await f.send("/authorize", options);
+  assert.deepEqual(await replay.json(), { error: "invalid_request", reason: "consent_form_proof_invalid" });
+});
+
+test("cookie fallback rejects missing, forged, cross-origin or mismatched browser proof", async t => {
+  const f = await fixture(t);
+  const started = await f.begin(await f.register());
+  const formProof = /name="form_proof" value="([a-f0-9]{64})"/.exec(started.html)?.[1];
+  assert.ok(formProof);
+  const headers = { cookie: "", "sec-fetch-site": "same-origin" };
+  const forged = await f.approve(started, { form_proof: "0".repeat(64) }, headers);
+  assert.deepEqual(await forged.json(), { error: "invalid_request", reason: "consent_form_proof_invalid" });
+  const notBrowser = await f.approve(started, { form_proof: formProof }, { cookie: "" });
+  assert.deepEqual(await notBrowser.json(), { error: "invalid_request", reason: "consent_cookie_missing" });
+  assert.equal((await f.approve(started, { form_proof: formProof },
+    { ...headers, origin: "https://evil.example" })).status, 403);
+  const mismatch = await f.approve(started, { form_proof: formProof },
+    { ...headers, cookie: started.cookie.split("=")[0] + "=" + "f".repeat(64) });
+  assert.deepEqual(await mismatch.json(), { error: "invalid_request", reason: "consent_cookie_mismatch" });
+  assert.equal((await f.approve(started, { form_proof: formProof }, headers)).status, 302);
+});
+
 test("consent failures identify only safe stage codes, never cookies or secrets", async t => {
   const f = await fixture(t);
   const client = await f.register();
