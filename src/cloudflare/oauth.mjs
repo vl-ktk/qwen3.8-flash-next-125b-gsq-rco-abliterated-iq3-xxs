@@ -110,6 +110,18 @@ function validateAuthRequest(auth) {
   }
 }
 
+// Public reason codes intentionally contain no cookie, handle, client or password data.
+function consentSessionFailure(error) {
+  if (!(error instanceof AuthorizationError) || error.code !== "invalid_request") return null;
+  const message = error.description ?? "";
+  const reason = message.includes("not started in this browser") ? "consent_cookie_missing"
+    : message.includes("different browser session") ? "consent_cookie_mismatch"
+    : message.includes("expired or was already used") ? "consent_expired"
+    : message.includes("Missing transaction handle") ? "consent_handle_missing"
+    : "consent_session_invalid";
+  return json(400, { error: "invalid_request", reason });
+}
+
 async function authorize(request, env, kv) {
   const api = server.getOAuthApi({ OAUTH_KV: kv });
   if (request.method === "GET") {
@@ -134,28 +146,39 @@ ${auth.scope.map(scope => `<p><label><input type="checkbox" name="scope" value="
   if (request.headers.get("origin") !== ISSUER) return json(403, { error: "invalid_origin" });
   if (!request.headers.get("content-type")?.startsWith("application/x-www-form-urlencoded")) return json(415, { error: "invalid_content_type" });
   const form = new URLSearchParams(await readBody(request, 16384));
-  for (const name of ["handle", "password", "decision"]) if (form.getAll(name).length > 1) return json(400, { error: "invalid_request" });
+  for (const name of ["handle", "password", "decision"]) if (form.getAll(name).length > 1) return json(400, { error: "invalid_request", reason: "consent_duplicate_field" });
   const handle = form.get("handle");
-  if (typeof handle !== "string" || handle.length > 128) return json(400, { error: "invalid_request" });
-  const preview = await openTransaction(kv, request, COOKIE_BASE, handle, "consent");
-  validateAuthRequest(preview.record.request);
+  if (typeof handle !== "string" || handle.length > 128) return json(400, { error: "invalid_request", reason: "consent_handle_invalid" });
+  let preview;
+  try { preview = await openTransaction(kv, request, COOKIE_BASE, handle, "consent"); }
+  catch (error) { const failure = consentSessionFailure(error); if (failure) return failure; throw error; }
+  try { validateAuthRequest(preview.record.request); }
+  catch (error) { if (error instanceof AuthorizationError) return json(400, { error: "invalid_request", reason: "consent_auth_record_invalid" }); throw error; }
   if (form.get("decision") === "deny") {
     const denied = await api.denyConsent(request, handle);
     const headers = new Headers(denied.headers);
     headers.set("location", denied.redirectTo);
     return new Response(null, { status: 302, headers });
   }
-  if (form.get("decision") !== "approve") return json(400, { error: "invalid_request" });
+  if (form.get("decision") !== "approve") return json(400, { error: "invalid_request", reason: "consent_decision_missing" });
   if (!await rateLimit(kv, "owner-login", 5, 900)) return json(429, { error: "rate_limited" });
   if (!await passwordMatches(form.get("password"), env.QWEN_OAUTH_OWNER_PASSWORD)) return json(403, { error: "access_denied" });
   const scopes = [...new Set(form.getAll("scope"))];
   if (!scopes.length || scopes.some(s => !preview.record.request.scope.includes(s))) return json(400, { error: "invalid_scope" });
-  const approved = await api.approveConsent(request, handle, { scope: scopes });
-  const done = await api.completeAuthorization({
-    request: approved.request, userId: "qwen-owner", metadata: {}, scope: scopes,
-    props: { project: "qwen125b-mcp", generation: env.QWEN_OAUTH_GENERATION },
-    revokeExistingGrants: true,
-  });
+  let approved, done;
+  try {
+    approved = await api.approveConsent(request, handle, { scope: scopes });
+    done = await api.completeAuthorization({
+      request: approved.request, userId: "qwen-owner", metadata: {}, scope: scopes,
+      props: { project: "qwen125b-mcp", generation: env.QWEN_OAUTH_GENERATION },
+      revokeExistingGrants: true,
+    });
+  } catch (error) {
+    if ((error instanceof AuthorizationError && error.code === "invalid_request") || error instanceof SyntaxError || error instanceof URIError) {
+      return json(400, { error: "invalid_request", reason: "consent_completion_invalid" });
+    }
+    throw error;
+  }
   const headers = new Headers(approved.headers);
   headers.set("location", done.redirectTo);
   return new Response(null, { status: 302, headers });
