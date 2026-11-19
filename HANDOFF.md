@@ -11,7 +11,8 @@
 - `src/cloudflare/device-pairing.mjs`: регистрация публичного ключа Ed25519, случайный одноразовый код и fingerprint, одобрение существующим паролем владельца и CSRF proof, статус, отзыв, проверка подписи свежего nonce **перед каждым MCP-запросом**. Состояние в прежнем Qwen DO; никакие секреты не добавлялись.
 - `src/windows/device-identity.mjs`: генерация Ed25519 пары **на Windows** и подпись origin challenge. Ни в Git, ни в архив не класть приватный ключ.
 - Worker вызывает `GET /device/attest` через фиксированный VPC origin, только после OAuth; неподтверждённый, поддельный или отключённый origin получает fail-closed 503.
-- Локально `npm run check`, **41/41** тестов, `npm run build` (Wrangler dry-run) PASS. Тестируется реальный SQLite DO persistence при restart и защита от replay/CSRF/подделки.
+- Локально `npm run check`, **41/41** тестов, `npm run build` (Wrangler dry-run) PASS.
+- [PR #11](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/11) **MERGED** (commit `ac22b3c7815468788b346e010d5cf0379105f8b2`); [CI #44560166652](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44560166652) SUCCESS, 41/41; `check`/dry-run PASS. Код пункта 8 сохранён в `main`, но **НЕ опубликован в Cloudflare**. Тестируется реальный SQLite DO persistence при restart и защита от replay/CSRF/подделки.
 - Подробнее `docs/STEP_8_REPORT.md`. **НЕ разворачивать step8 Worker до готовности Windows MCP `/device/attest`: без пары все авторизованные ChatGPT-вызовы получили бы 503.** Рабочая v11 остаётся активна.
 
 ## Что осталось
