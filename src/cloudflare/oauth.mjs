@@ -140,6 +140,13 @@ async function authorize(request, env, kv) {
     const auth = await api.parseAuthRequest(request);
     validateAuthRequest(auth);
     const client = await api.lookupClient(auth.clientId);
+    // Chrome applies form-action to the POST's redirect chain too. 'self' alone
+    // permits the POST but blocks the provider's 302 to ChatGPT after consent.
+    // Only the already validated, registered callback origin may be added.
+    const callbackOrigin = new URL(auth.redirectUri).origin;
+    if (!/^https?:\/\/(?:[a-z0-9.-]+|\[[0-9a-f:]+\])(?::[0-9]+)?$/i.test(callbackOrigin)) {
+      throw new AuthorizationError("invalid_request", { description: "Unsupported redirect origin" });
+    }
     const consent = await api.beginConsent(auth);
     const formProof = [...crypto.getRandomValues(new Uint8Array(32))]
       .map(byte => byte.toString(16).padStart(2, "0")).join("");
@@ -147,11 +154,16 @@ async function authorize(request, env, kv) {
       { expirationTtl: CONSENT_PROOF_TTL });
     const headers = new Headers(consent.headers);
     headers.set("content-type", "text/html; charset=utf-8");
-    headers.set("content-security-policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    headers.set("content-security-policy", `default-src 'none'; form-action 'self' ${callbackOrigin}; frame-ancestors 'none'; base-uri 'none'`);
+    headers.set("x-qwen-oauth-stage", "consent_issued");
+    const sourceUrl = new URL(request.url);
+    const formAction = sourceUrl.pathname + sourceUrl.search;
+    const expiresAt = new Date(Date.now() + CONSENT_PROOF_TTL * 1000).toISOString();
     const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Qwen 125B MCP</title>
 <h1>Доступ к Qwen 125B MCP</h1><p>Клиент: ${esc(client.clientName || auth.clientId)}</p>
 <p>Возврат: ${esc(auth.redirectUri)}</p><p>Разрешайте доступ только после проверки клиента и адреса возврата.</p>
-<form method="post" action="/authorize"><input type="hidden" name="handle" value="${esc(consent.handle)}"><input type="hidden" name="form_proof" value="${formProof}">
+<p>Форма одноразовая и действует 10 минут (до <time datetime="${expiresAt}">${expiresAt}</time>). Если срок истечёт, откроется новая форма; пароль потребуется ввести заново.</p>
+<form method="post" action="${esc(formAction)}"><input type="hidden" name="handle" value="${esc(consent.handle)}"><input type="hidden" name="form_proof" value="${formProof}">
 ${auth.scope.map(scope => `<p><label><input type="checkbox" name="scope" value="${esc(scope)}" checked>${esc(scope)}</label></p>`).join("")}
 <p><label>Пароль владельца <input type="password" name="password" autocomplete="current-password" required maxlength="1024"></label></p>
 <button name="decision" value="approve">Разрешить</button><button name="decision" value="deny" formnovalidate>Отказать</button></form></html>`;
@@ -168,6 +180,26 @@ ${auth.scope.map(scope => `<p><label><input type="checkbox" name="scope" value="
   let preview;
   let consentRequest = request;
   const handleDigest = await hash(handle);
+  // Cookie Max-Age and both server records expire after 600 s. Check the OAuth
+  // transaction first: v8 mistook an absent/expired/consumed proof for a hash
+  // mismatch before it ever reached the provider's transaction expiry check.
+  if (!await kv.get(`transaction:${handleDigest}`)) {
+    const url = new URL(request.url);
+    if (request.headers.get("accept")?.includes("text/html")
+      && request.headers.get("sec-fetch-site") === "same-origin" && url.search) {
+      // This is a NEW GET + consent + password, never acceptance of the old proof.
+      // Validate the same-origin restart URL; no submitted password is retained.
+      try {
+        assertUnique(url.searchParams);
+        validateAuthRequest(await api.parseAuthRequest(new Request(url)));
+        return new Response(null, { status: 303, headers: {
+          location: url.pathname + url.search, "cache-control": "no-store",
+          "x-qwen-oauth-stage": "consent_expired_restart",
+        } });
+      } catch { /* Non-browser or invalid restart parameters fail closed below. */ }
+    }
+    return json(400, { error: "invalid_request", reason: "consent_expired" });
+  }
   try { preview = await openTransaction(kv, consentRequest, COOKIE_BASE, handle, "consent"); }
   catch (error) {
     const failure = consentSessionFailure(error);
@@ -182,6 +214,7 @@ ${auth.scope.map(scope => `<p><label><input type="checkbox" name="scope" value="
       return json(400, { error: "invalid_request", reason: "consent_cookie_missing" });
     }
     const expected = await kv.get(`consent-proof:${handleDigest}`);
+    if (expected === null) return json(400, { error: "invalid_request", reason: "consent_form_proof_missing" });
     if (!digestEquals(await hash(proof), expected)) {
       return json(400, { error: "invalid_request", reason: "consent_form_proof_invalid" });
     }
@@ -202,6 +235,7 @@ ${auth.scope.map(scope => `<p><label><input type="checkbox" name="scope" value="
     await kv.delete(`consent-proof:${handleDigest}`);
     const headers = new Headers(denied.headers);
     headers.set("location", denied.redirectTo);
+    headers.set("x-qwen-oauth-stage", "consent_denied");
     return new Response(null, { status: 302, headers });
   }
   if (form.get("decision") !== "approve") return json(400, { error: "invalid_request", reason: "consent_decision_missing" });
@@ -226,6 +260,7 @@ ${auth.scope.map(scope => `<p><label><input type="checkbox" name="scope" value="
   }
   const headers = new Headers(approved.headers);
   headers.set("location", done.redirectTo);
+  headers.set("x-qwen-oauth-stage", "code_issued");
   return new Response(null, { status: 302, headers });
 }
 
@@ -268,7 +303,13 @@ export async function oauthRequest(request, env, kv) {
     }
     request = new Request(request.url, { method: "POST", headers: request.headers, body: text });
   }
-  return server.fetch(request, { OAUTH_KV: kv }, {});
+  const response = await server.fetch(request, { OAUTH_KV: kv }, {});
+  if (url.pathname === "/oauth/token" && request.method === "POST" && response.ok) {
+    const headers = new Headers(response.headers);
+    headers.set("x-qwen-oauth-stage", "token_endpoint_success");
+    return new Response(response.body, { status: response.status, headers });
+  }
+  return response;
 }
 
 export async function verify(request, env, kv) {

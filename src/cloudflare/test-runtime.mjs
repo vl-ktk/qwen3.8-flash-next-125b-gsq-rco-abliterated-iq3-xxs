@@ -14,4 +14,5 @@ export class TestOAuthState extends QwenOAuthState {
   }
   async failStorage() { await this.ctx.storage.deleteAll(); }
   async bumpGeneration() { this.env.QWEN_OAUTH_GENERATION = "2"; }
+  async audit() { return this.ctx.storage.sql.exec("SELECT path, status, stage, reason FROM qwen_oauth_audit_v1 ORDER BY at_ms").toArray(); }
 }
