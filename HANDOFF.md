@@ -39,6 +39,7 @@
 ## Пункт 12 — мониторинг Windows (исходник готов, live Windows не проверен)
 - `src/windows/monitoring.mjs` и `system_monitor` (через `windows-tools.mjs`): CPU%, RAM, фиксированные тома с объёмом/свободным местом, до 5 системных событий за 24 часа (только безопасные метаданные); NVIDIA GPU/VRAM/температура только через проверенный путь `nvidia-smi`. Нет телеметрии — `null` / `unavailable`; температура CPU недоступна без надёжного датчика; тип SSD/HDD не установлен стандартным Win32_LogicalDisk.
 - MCP runtime `0.12.0`. **73/73** автоматических тестов PASS; `npm run check` PASS; Wrangler `npm run build` dry-run PASS. Проверка Windows PowerShell и `nvidia-smi` только на моках Linux. GitHub исходник и отчёт: `docs/STEP_12_REPORT.md`.
+- [PR #15](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/15) **MERGED** (squash commit `4a7fa899a992a52e54eb185c6148176d5f7d5383`); [CI #44579086990](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44579086990) SUCCESS (npm ci, check, tests, build).
 - **Рабочий Cloudflare Worker v11 не изменён** (подтверждено read-only API). Для закрытия шага: реальная Windows + показания на железе + сквозная связь при единой установке.
 
 ## Что осталось
