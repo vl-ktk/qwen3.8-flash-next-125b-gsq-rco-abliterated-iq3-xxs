@@ -183,6 +183,17 @@ test("authorization validates redirect, resource, scopes and mandatory S256 for 
   assert.equal(bad.status, 400);
 });
 
+test("consent GET preserves same-origin Origin for browser form POST", async t => {
+  const f = await fixture(t);
+  const started = await f.begin(await f.register());
+  assert.equal(started.response.status, 200, started.html);
+  // Referrer-Policy: no-referrer makes browsers send Origin: null on navigation form POSTs.
+  assert.equal(started.response.headers.get("referrer-policy"), "same-origin");
+  assert.ok(started.html.includes('<form method="post" action="/authorize">'));
+  assert.equal((await f.approve(started, {}, { origin: "null" })).status, 403);
+  assert.equal((await f.approve(started)).status, 302);
+});
+
 test("consent requires same-origin browser binding, owner password and requested scope subset", async t => {
   const f = await fixture(t);
   const started = await f.begin(await f.register());

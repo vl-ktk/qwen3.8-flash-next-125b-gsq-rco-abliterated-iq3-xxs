@@ -7,7 +7,7 @@ const COOKIE_BASE = "__Host-qwen125b-consent";
 const PUBLIC_HEADERS = {
   "cache-control": "no-store, max-age=0",
   "x-content-type-options": "nosniff",
-  "referrer-policy": "no-referrer",
+  "referrer-policy": "same-origin",
 };
 
 export function json(status, body, headers = {}) {
