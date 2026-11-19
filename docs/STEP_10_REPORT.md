@@ -25,6 +25,8 @@
 - Рабочий Cloudflare Worker **v11 не изменялся**. Код Ed25519 gate от пункта 8 всё ещё в GitHub `main`, но не выложен: до подключения реальной Windows пары это вызвало бы 503.
 - Следующий пункт — **11: разрешённые Windows-инструменты, схемы и проверка аргументов**. Реальная приёмка — единым тестом на ПК владельца после установщика.
 
+- [PR #13](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/13) **MERGED**, squash commit `d8100fa71fc6fd22a43c59a26ff0860c8f9d6f39`; [GitHub CI #44567106093](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44567106093) SUCCESS (55/55). Код лежит в `main`.
+
 ## Версия/откат
 
 - Продакшен `qwen125b-mcp` v11: version `8e719c62-5316-434d-b092-fd0f3cdc81d5`, deployment `5667dd47-6d10-47d8-a9dc-ab8d262047f1` (последняя подтверждённая).
