@@ -1,32 +1,49 @@
-# Пункт 7 — поиск действующего OAuth Worker для безопасного повторного использования
+# OAuth Worker: подтверждённый источник и перенос
 
-Дата: 19.11.2026. Статус: **аудит источника, не реализация OAuth**. Пункт 7 в ROADMAP остаётся [ ].
+Дата: 19.11.2026. Исходный код получен; прежний блокер экспорта снят. Реализация и ограничения приёмки — в [отчёте шага 7](STEP_7_REPORT.md).
 
-## Найдено в Cloudflare (только чтение)
+## Подтверждённая версия (только GET)
 
-- Действующий Worker: `instagram-mcp-oauth-test`.
-- Активная версия: **38**, version ID `9dd45b0a-0e55-4fbc-a97f-1801327daad5`, deployment `63e07038-6e8a-4961-9009-0ecba1afae6d`, на 100%. Последняя публикация 14 ноября 2026 г.
-- Настройки подтверждают присутствие `OAUTH_KV`, `OAUTH_V1_KV`, `MCP_ACCESS_KEY`, `OAUTH_ADMIN_PASSWORD` и других связанных с KTK Social привязок.
-- Это **вероятный канонический источник** ранее созданного OAuth для MCP, а не предположение, что в проекте никогда не было OAuth.
+- Worker: `instagram-mcp-oauth-test`, account `11e9863342745bfdb203486f289e0145`.
+- Активная и последняя загруженная версия **38**, ID `9dd45b0a-0e55-4fbc-a97f-1801327daad5`.
+- Deployment `63e07038-6e8a-4961-9009-0ecba1afae6d`, 100%; создан 14.11.2026.
+- До и после извлечения GET `/deployments` и `/versions` подтвердили ту же версию. Никаких PUT/POST/PATCH/DELETE в Cloudflare не выполнялось.
 
-## Что удалось и не удалось
+## Почему прошлый аудит не видел JS
 
-- `GET /workers/scripts/instagram-mcp-oauth-test/settings` и `GET .../versions`/version detail **успешны**: доступны bindings/metadata/версии.
-- `GET /workers/scripts/instagram-mcp-oauth-test` и `GET .../content/v2` через текущий Cloudflare connector не предоставили исходник (сырое multipart/JS тело результата не доставлено в окружение). Оттуда **нельзя безопасно сделать точную копию** кода.
-- GitHub code search пользователя по `OAUTH_V1_KV`, `OAUTH_ADMIN_PASSWORD`, OAuth metadata endpoints не обнаружил подтверждённого исходника.
-- Browser в этом ChatGPT окружении недоступен для авторизованного редактора Cloudflare. Нет основания заявлять, что OAuth Worker скопирован.
+`GET /accounts/{account_id}/workers/scripts/{script_name}` и `GET .../content/v2` возвращают raw multipart **строкой напрямую** через текущий connector. Это не JSON-обёртка `response.result`. Просмотр только `.result` терял содержимое. Проверено на текущем доступе, без получения дополнительных прав, токенов или секретов.
 
-## Решение для Qwen 125B
+В multipart шесть модулей: `oauth.js`, `mcp-resource-registry.mjs`, `facebook-mcp-registry.mjs`, `threads-mcp-registry.mjs`, `tiktok-mcp-registry.mjs`, `youtube-mcp-registry.mjs`. В Git перенесён только общий provider из `oauth.js`. Социальные реестры, исходный entrypoint, старый дублирующий provider и социальные handlers не переносились. Полный исходный bundle не сохранялся в репозитории.
 
-1. **Предпочтение:** независимая копия **исходного OAuth-кода версии 38** в данном приватном репозитории после получения исходного JS/модулей с помощью доступного авторизованного интерфейса (Cloudflare dashboard или Wrangler).
-2. **Запрет:** не копировать secrets, активные OAuth sessions, `OAUTH_KV`/ `OAUTH_V1_KV` namespaces, D1 или существующие служебные привязки. Для Qwen создать независимый KV/состояние и новые отдельные секреты в шаге 7.
-3. Провести diff и удалить функциональность Instagram/Threads/TikTok/Facebook; сохранить только общую часть совместимой с ChatGPT авторизации. Это **не** слепой дубль старого Worker.
-4. Выполнить тесты discovery (OAuth protected resource/authorization server metadata), PKCE, `state`, rotation/revoke, scopes, replay, истечение токена, разграничение tools и отказ всем неподписанным запросам; только после этого включить forwarding к VPC.
-5. До завершения всех проверок новый Worker `qwen125b-mcp` должен оставаться **fail-closed 401**, как в текущем коде.
+## Точные границы и контрольные суммы
 
-**Результат:** существующий OAuth Worker **подтверждён**, но его исходный код через текущий доступ **не извлечён**. Исполняемые изменения на Qwen не производились, шаг 7 **не закрыт**. Другие Workers, KV, D1, секреты и туннели не изменялись.
+Модуль `oauth.js` содержит общий `@cloudflare/workers-oauth-provider`, затем `// ../generated-legacy-oauth.mjs` и код социальных сервисов. Перенесена только часть до этого маркера. Удалён неиспользуемый application import `WorkerEntrypoint3` с комментарием `// oauth.mjs`; добавлен один export трёх используемых API. **Тела функций библиотеки не менялись.** Правила Qwen находятся отдельно в `oauth.mjs`, `storage.mjs`, `worker.mjs`.
 
-## GitHub и восстановление
-- Целевой repo: `vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs`.
-- До инвентаризации коммит `6b10109d355be1ecbd383b3aad65a6f7a909eb44`.
-- Никаких Cloudflare deployment/production-модификаций на этом этапе.
+| Артефакт | SHA-256 |
+|---|---|
+| Исходный модуль `oauth.js` | `54f30934870337451feb4f832744e13c1259d6b4c3b8046224127c5494e8cf2a` |
+| Извлечённый provider до добавления export | `d6d795a6211a11974c9980210609e1ff60057b004f16c693853e0ff91d9500ed` |
+| `src/cloudflare/vendor/oauth-provider.mjs` | `8014c399bc5fbdf4e07df8f3d121d820dbbe2984323f372d29836c065b46b88c` |
+
+Первый и второй хеши рассчитаны непосредственно над ответом read-only Cloudflare API. Второй совпал с локальным извлечением. Итоговый hash проверяет тест, LF зафиксирован `.gitattributes`. Точная npm-версия по bundle не установлена и не подменяется последним npm-релизом; идентичность фиксируют Worker version и SHA-256.
+
+Машиночитаемое происхождение: `src/cloudflare/vendor/provenance.json`. Лицензия MIT и attribution Cloudflare сохранены в `src/cloudflare/vendor/LICENSE.txt`; [исходная лицензия](https://github.com/cloudflare/workers-oauth-provider/blob/main/LICENSE.txt).
+
+Воспроизведение из отдельного авторизованного экспорта (multipart или точный `oauth.js`):
+
+```powershell
+node scripts/extract-oauth-provider.mjs <путь-к-авторизованному-экспорту>
+```
+
+Скрипт проверяет исходный SHA-256 до записи и сохраняет только provider. Сам экспорт нельзя добавлять в Git; значения секретов для этой операции не нужны.
+
+## Изоляция Qwen
+
+- Нет привязок к существующим OAuth KV, D1, account registry или social service bindings.
+- `OAUTH_KV` встречается только как внутренний API-контракт библиотеки; ему передаётся адаптер **отдельного SQLite Durable Object Qwen**, а не старый KV namespace. Транзакция охватывает всю OAuth-операцию, включая async crypto; это проверено конкурентными code/refresh exchanges в workerd.
+- Новый секрет `QWEN_OAUTH_OWNER_PASSWORD` не создавался; ни значения старых секретов, ни содержимое KV, ни пользовательские подключения не запрашивались.
+- CIMD и внешние identity providers отключены; работает DCR. Нет внешнего токен-fallback, implicit flow или token exchange.
+- Отдельный issuer/resource, cookie prefix, scope namespace, generation и проверяемый grant. Чужой access token не принимается.
+- Из исходного приложения не переносились tenants, аккаунты соцсетей, пароли, sessions или подключения.
+
+Опубликованный `qwen125b-mcp` остался в прежнем fail-closed состоянии. Код в Git не равен Cloudflare deployment; шаг 7 остаётся [ ] до фактической приёмки.

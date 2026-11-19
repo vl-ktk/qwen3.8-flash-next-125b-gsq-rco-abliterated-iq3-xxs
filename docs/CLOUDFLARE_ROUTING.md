@@ -16,7 +16,7 @@
 
 ## Защита (не обходить в последующих шагах)
 
-Worker source `src/cloudflare/worker.mjs` намеренно НЕ вызывает env.QWEN_MCP_ORIGIN.fetch. Любой `/mcp` получает ожидаемый 401 `authorization_not_configured` согласно локальным тестам, включая поддельные Bearer-токены. Публичный `/__edge_status` возвращает только `state=locked` по исходному коду. Ни OAuth, ни авторизованный origin proxy, ни MCP сервер на Windows пока не реализованы. В пункте 7 внедрять проверяемую OAuth-авторизацию до любой отправки запроса к VPC; в пункте 8 сделать одноразовую привязку устройства. Нельзя открывать MCP в интернет ради проверки.
+**Опубликованная версия шага 6** намеренно НЕ вызывает env.QWEN_MCP_ORIGIN.fetch. Любой `/mcp` получает 401 `authorization_not_configured`, включая поддельные Bearer-токены; `/__edge_status` сообщает `state=locked`. Она не изменена в ходе шага 7. **Новая реализация в Git** добавляет OAuth и авторизованный proxy, но не опубликована: см. `docs/STEP_7_REPORT.md`. Без новых OAuth bindings/секрета она также отказывает. В пункте 8 требуется одноразовая привязка устройства; Windows MCP отсутствует. Нельзя открывать MCP в интернет ради проверки.
 
 ## Реально выполненные проверки
 
@@ -34,5 +34,7 @@ Worker source `src/cloudflare/worker.mjs` намеренно НЕ вызывае
 - В случае проблемы отключить `workers.dev` **только** для `qwen125b-mcp` через POST /accounts/{account_id}/workers/scripts/qwen125b-mcp/subdomain с `enabled:false`; не удалять работающие чужие ресурсы. Git rollback сам по себе не меняет Cloudflare.
 
 **Итог:** облачные компоненты маршрута настроены и API-проверены с закрытым MCP. Реальная связность ждёт авторизации, runtime и ПК. Следующий пункт №7.
+
+Повторная read-only проверка 19.11.2026 при реализации шага 7: активные Worker version/deployment остались `309d8a3f-ca73-439b-93fe-9a3a10d0dcd7` / `52f78262-bc33-43e2-af8e-f6a5c215b812`. Wrangler запускался только с `--dry-run`; Cloudflare ресурсы не менялись.
 
 Официальная документация: https://developers.cloudflare.com/workers-vpc/configuration/vpc-services/ ; https://developers.cloudflare.com/workers-vpc/api/

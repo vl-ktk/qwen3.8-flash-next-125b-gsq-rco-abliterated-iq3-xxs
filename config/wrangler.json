@@ -1,9 +1,16 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
+  "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "qwen125b-mcp",
-  "main": "src/cloudflare/worker.mjs",
+  "main": "../src/cloudflare/worker.mjs",
   "compatibility_date": "2026-11-17",
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "workers_dev": true,
+  "preview_urls": false,
+  "vars": { "QWEN_OAUTH_GENERATION": "1" },
+  "durable_objects": {
+    "bindings": [{ "name": "QWEN_OAUTH_STATE", "class_name": "QwenOAuthState" }]
+  },
+  "migrations": [{ "tag": "qwen-oauth-v1", "new_sqlite_classes": ["QwenOAuthState"] }],
   "vpc_services": [
     {
       "binding": "QWEN_MCP_ORIGIN",
