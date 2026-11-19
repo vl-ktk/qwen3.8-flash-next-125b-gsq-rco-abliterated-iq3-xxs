@@ -2,7 +2,7 @@
 
 Дата: **19.11.2026**, Europe/Bucharest. Основание: [Issue #1](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/issues/1).
 
-**Статус: реализация в Git и локальные проверки завершены; живая приёмка шага 7 НЕ завершена. Cloudflare deployment не выполнялся.** В ROADMAP остаётся [ ]. Пункты 8–24 не выполнялись.
+**Актуальный статус на 19.11.2026 после разрешённого деплоя:** OAuth-код опубликован в `qwen125b-mcp` как Worker v2 `b8946e83-551d-433a-804b-6b33f920a7d2` (100%), deployment `fad59a18-3013-49ed-812f-2c8891f11c65`. Отдельный SQLite Durable Object создан. **Owner secret ещё не установлен — публичный статус `locked`; живой OAuth вход через ChatGPT и Windows origin не проверены.** Шаг 7 и ROADMAP остаются [ ]; пункты 8–24 не выполнялись. Ниже сохранён исходный исторический отчёт Codex о состоянии **до** деплоя; актуальное дополнение — в конце документа.
 
 ## Источник и границы
 
@@ -88,3 +88,21 @@ Read-only API перепроверил:
 Откат локального кода: revert PR либо возврат к базовому SHA. Он не откатывает облачные deployments или OAuth-состояние автоматически. Облачных изменений в этом PR нет. При будущем отзыве всех access tokens увеличивать `QWEN_OAUTH_GENERATION` в разрешённом deployment; per-grant revoke доступен через OAuth token/revocation endpoint.
 
 Проверенные первичные материалы: [Cloudflare VPC API](https://developers.cloudflare.com/workers-vpc/api/), [Durable Objects storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/), [Cloudflare OAuth provider](https://github.com/cloudflare/workers-oauth-provider). Исполняемый OAuth взят из подтверждённого Worker, а не с текущего upstream main.
+
+## Дополнение: разрешённый Cloudflare deploy (19.11.2026)
+
+По отдельному разрешению владельца после merge PR #2 `e5f5a67966ec4aa59d00e2c623e952353e3b8284` код Worker опубликован через официальный Cloudflare API (multipart ES modules). Это изменение **только** `qwen125b-mcp`, не original OAuth Worker.
+
+| Параметр | Подтверждённый результат |
+|---|---|
+| Worker v2 | `b8946e83-551d-433a-804b-6b33f920a7d2` (100%) |
+| Deployment v2 | `fad59a18-3013-49ed-812f-2c8891f11c65` |
+| Новый SQLite DO | `QWEN_OAUTH_STATE` → `QwenOAuthState`, namespace `162cfb67fccc40f5907b0093b7a7f944` |
+| VPC Service | `QWEN_MCP_ORIGIN` → `01a1f103-bc58-78c2-97ef-91331e10775e` (сохранён) |
+| OAuth Generation | `1` |
+| Secret владельца | `QWEN_OAUTH_OWNER_PASSWORD` отсутствует; не сохранялся и не выводился |
+| Версия до деплоя для отката | `309d8a3f-ca73-439b-93fe-9a3a10d0dcd7`, deployment `52f78262-bc33-43e2-af8e-f6a5c215b812` |
+
+**Реально проверено:** Cloudflare API подтвердил новую активную версию (100%), DO binding и VPC binding; в Chrome открыты публичные `__edge_status` (`{"state":"locked","endpoint":"mcp"}`), OAuth discovery (`{"error":"authorization_not_configured"}`), `/mcp` без токена (`{"error":"invalid_token"}`). Прямой curl из изолированной среды не достиг URL (тайм-аут); проверка через браузер успешна. Cloudflare Secret пуст; полноценный реальный OAuth code/PKCE/consent, ChatGPT connection и Windows MCP пока не тестировались. Преддеплойная база тестов: CI SUCCESS 21/21, npm check, dry-run build; после Cloudflare upload тесты в production не запускались.
+
+**Далее:** владелец вводит новый, независимый пароль владельца (не менее 32 символов) прямо в Cloudflare secret `QWEN_OAUTH_OWNER_PASSWORD` для `qwen125b-mcp`, без пересылки в чат. Затем проверить актуальные версии, статус `protected`, OAuth discovery и реальное подключение ChatGPT. Windows MCP/туннель не готовы, поэтому полный E2E остаётся блокером пункта 7. Откат через Cloudflare deployment прежней версии, не удаляя SQLite DO; Git rollback отдельно.
