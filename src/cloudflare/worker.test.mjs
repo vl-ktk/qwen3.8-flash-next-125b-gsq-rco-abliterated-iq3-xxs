@@ -643,6 +643,9 @@ test("device pairing demands owner approval, fingerprint and proof of Ed25519 po
 
 test("pairing management blocks forged origins, CSRF replay and incorrect owner password", async t => {
   const f = await fixture(t, { paired: false });
+  const browser = await f.send("/device/pair/manage");
+  assert.equal(browser.headers.get("referrer-policy"), "same-origin");
+  assert.equal(browser.headers.get("content-security-policy"), "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   const started = await (await pairStart(f, f.identity)).json();
   const approve = { action: "approve", code: started.user_code, fingerprint: started.fingerprint };
   assert.equal((await deviceForm(f, approve, { origin: "https://evil.test" })).status, 403);
