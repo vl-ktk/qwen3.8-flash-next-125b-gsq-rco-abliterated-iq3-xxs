@@ -44,7 +44,7 @@ export async function hash(value) {
   return [...new Uint8Array(bytes)].map(x => x.toString(16).padStart(2, "0")).join("");
 }
 
-async function passwordMatches(actual, expected) {
+export async function passwordMatches(actual, expected) {
   if (typeof actual !== "string" || actual.length > 1024) return false;
   const [a, b] = await Promise.all([hash(actual), hash(expected)]);
   let difference = 0;
