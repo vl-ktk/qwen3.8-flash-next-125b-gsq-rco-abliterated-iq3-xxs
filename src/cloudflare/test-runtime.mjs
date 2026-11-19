@@ -2,6 +2,9 @@
 export { default } from "./worker.mjs";
 import { QwenOAuthState } from "./worker.mjs";
 export class TestOAuthState extends QwenOAuthState {
+  async provisionTestDevice(device) {
+    await this.ctx.storage.put("device:active", { value: JSON.stringify(device) });
+  }
   async expire(prefix, field) {
     for (const [key, record] of await this.ctx.storage.list({ prefix })) {
       if (field) {
