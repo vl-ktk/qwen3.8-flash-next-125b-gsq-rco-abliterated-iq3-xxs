@@ -194,6 +194,37 @@ test("consent GET preserves same-origin Origin for browser form POST", async t =
   assert.equal((await f.approve(started)).status, 302);
 });
 
+test("ChatGPT two-scope browser consent grants a code with an explicit submit button", async t => {
+  const f = await fixture(t);
+  const started = await f.begin(await f.register(), { scope: "qwen:read qwen:files:read", ui_locales: "ru-RU" });
+  assert.equal(started.response.status, 200, started.html);
+  const submitted = new URLSearchParams([
+    ["handle", started.handle], ["scope", "qwen:read"], ["scope", "qwen:files:read"],
+    ["password", password], ["decision", "approve"],
+  ]);
+  const response = await f.send("/authorize", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: target, cookie: started.cookie },
+    body: submitted.toString(),
+  });
+  assert.equal(response.status, 302, await response.clone().text());
+  assert.equal(new URL(response.headers.get("location")).searchParams.get("state"), "unpredictable-client-state");
+});
+
+test("consent failures identify only safe stage codes, never cookies or secrets", async t => {
+  const f = await fixture(t);
+  const client = await f.register();
+  const started = await f.begin(client);
+  const missingCookie = await f.approve(started, {}, { cookie: "" });
+  assert.deepEqual(await missingCookie.json(), { error: "invalid_request", reason: "consent_cookie_missing" });
+  const missingDecision = await f.approve(started, { decision: "" });
+  assert.deepEqual(await missingDecision.json(), { error: "invalid_request", reason: "consent_decision_missing" });
+  const expired = await f.begin(client);
+  await (await f.stub()).expire("transaction:");
+  const expiredResponse = await f.approve(expired);
+  assert.deepEqual(await expiredResponse.json(), { error: "invalid_request", reason: "consent_expired" });
+});
+
 test("consent requires same-origin browser binding, owner password and requested scope subset", async t => {
   const f = await fixture(t);
   const started = await f.begin(await f.register());
