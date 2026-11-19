@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { OAuthStorage } from "./storage.mjs";
 import { ISSUER, RESOURCE, SCOPES, json, secure, challenge, readBody, oauthRequest, verify, isConfigured } from "./oauth.mjs";
+import { DEVICE_PATHS, devicePairRoute, attestDevice } from "./device-pairing.mjs";
 
 // Contracts for future Windows tools, not implementations of step 11.
 // Mutations, PowerShell, lifecycle and all unknown names remain default-deny.
@@ -23,7 +24,7 @@ function publicRoute(request, env) {
     const response = json(200, { resource: RESOURCE, authorization_servers: [ISSUER], scopes_supported: SCOPES, bearer_methods_supported: ["header"] });
     return request.method === "HEAD" ? new Response(null, { headers: response.headers }) : response;
   }
-  if (!PROTOCOL_PATHS.has(url.pathname) && url.pathname !== "/mcp") return json(404, { error: "not_found" });
+  if (!PROTOCOL_PATHS.has(url.pathname) && !DEVICE_PATHS.has(url.pathname) && url.pathname !== "/mcp") return json(404, { error: "not_found" });
   return null;
 }
 
@@ -85,6 +86,9 @@ export class QwenOAuthState extends DurableObject {
         const audit = { method: "" };
         return await this.recordResult(request, await this.mcp(request, audit), audit.method);
       }
+      if (DEVICE_PATHS.has(new URL(request.url).pathname)) {
+        return this.recordResult(request, await devicePairRoute(request, this.env, this.ctx.storage));
+      }
       const response = await this.ctx.storage.transaction(tx => oauthRequest(request.clone(), this.env, new OAuthStorage(tx)));
       // Expiry is enforced on every read; the alarm also reclaims old records.
       if (await this.ctx.storage.getAlarm() === null) await this.ctx.storage.setAlarm(Date.now() + 3600000);
@@ -141,7 +145,8 @@ export class QwenOAuthState extends DurableObject {
         if (!scope || !auth.scope.includes(scope)) return challenge("insufficient_scope", 403);
       } else if (!["initialize", "server/discover", "notifications/initialized", "notifications/cancelled", "ping", "tools/list"].includes(message.method)) return json(403, { error: "method_not_allowed" });
     }
-    if (!this.env.QWEN_MCP_ORIGIN?.fetch) return json(503, { error: "origin_unavailable" });
+    const deviceFailure = await attestDevice(this.env.QWEN_MCP_ORIGIN, this.ctx.storage);
+    if (deviceFailure) return deviceFailure;
     // Fixed destination and header allowlist. Never send caller credentials or claims.
     const headers = new Headers();
     for (const name of ["accept", "content-type", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id"]) {
