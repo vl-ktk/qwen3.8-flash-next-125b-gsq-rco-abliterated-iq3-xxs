@@ -59,7 +59,7 @@ export class QwenOAuthState extends DurableObject {
     )`);
   }
 
-  async recordResult(request, response) {
+  async recordResult(request, response, rpcMethod = "") {
     const path = new URL(request.url).pathname;
     let reason = "";
     if (response.status >= 400 && response.headers.get("content-type")?.startsWith("application/json")) {
@@ -67,7 +67,12 @@ export class QwenOAuthState extends DurableObject {
       const candidate = error.reason ?? error.error;
       if (typeof candidate === "string" && /^[a-z_]{1,80}$/.test(candidate)) reason = candidate;
     }
-    const stage = response.headers.get("x-qwen-oauth-stage") ?? (path === "/mcp" ? "mcp" : "protocol");
+    // Store only a bounded JSON-RPC method name, never the request body, tool
+    // name/arguments, credentials, or authorization headers. A live client can
+    // otherwise produce method_not_allowed without showing which protocol
+    // method its capability negotiation attempted.
+    const stage = path === "/mcp" && rpcMethod ? `mcp_rpc:${rpcMethod}`
+      : response.headers.get("x-qwen-oauth-stage") ?? (path === "/mcp" ? "mcp" : "protocol");
     this.ctx.storage.sql.exec("INSERT INTO qwen_oauth_audit_v1 VALUES (?, ?, ?, ?, ?)", Date.now(), path, response.status, stage, reason);
     return response;
   }
@@ -76,7 +81,10 @@ export class QwenOAuthState extends DurableObject {
     const direct = publicRoute(request, this.env);
     if (direct) return direct;
     try {
-      if (new URL(request.url).pathname === "/mcp") return await this.recordResult(request, await this.mcp(request));
+      if (new URL(request.url).pathname === "/mcp") {
+        const audit = { method: "" };
+        return await this.recordResult(request, await this.mcp(request, audit), audit.method);
+      }
       const response = await this.ctx.storage.transaction(tx => oauthRequest(request.clone(), this.env, new OAuthStorage(tx)));
       // Expiry is enforced on every read; the alarm also reclaims old records.
       if (await this.ctx.storage.getAlarm() === null) await this.ctx.storage.setAlarm(Date.now() + 3600000);
@@ -99,7 +107,7 @@ export class QwenOAuthState extends DurableObject {
     }
   }
 
-  async mcp(request) {
+  async mcp(request, audit = { method: "" }) {
     const auth = await this.ctx.storage.transaction(tx => verify(request, this.env, new OAuthStorage(tx)));
     if (!auth) return challenge();
     if (new URL(request.url).searchParams.size || !["GET", "POST", "DELETE"].includes(request.method)) return json(400, { error: "invalid_request" });
@@ -118,6 +126,8 @@ export class QwenOAuthState extends DurableObject {
       body = await readBody(request);
       try { message = JSON.parse(body); } catch { return json(400, { error: "invalid_request" }); }
       if (!message || Array.isArray(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string") return json(400, { error: "invalid_request" });
+      audit.method = message.method.length <= 80 && /^[a-z][a-z0-9_.-]*(?:\/[a-z][a-z0-9_.-]*)*$/.test(message.method)
+        ? message.method : "nonstandard";
       if (message.method === "tools/call") {
         if (!message.params || Array.isArray(message.params) || typeof message.params.name !== "string") return json(400, { error: "invalid_request" });
         const scope = Object.hasOwn(TOOL_SCOPES, message.params?.name) ? TOOL_SCOPES[message.params.name] : null;

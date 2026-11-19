@@ -530,3 +530,16 @@ test("MCP payload limits, malformed JSON, unsupported methods and host aliases n
   assert.equal((await f.mf.dispatchFetch("https://evil.test/mcp", { redirect: "manual", headers: { authorization: "Bearer " + login.access_token } })).status, 404);
   assert.equal(f.calls.length, 0);
 });
+ 
+test("denied MCP method is auditable by name without recording request content", async t => {
+  const f = await fixture(t);
+  const login = await f.login();
+  const denied = await f.mcp(login.access_token, "server/discover", { private_data: "never-log-this" });
+  assert.equal(denied.status, 403);
+  assert.deepEqual(await denied.json(), { error: "method_not_allowed" });
+  const rows = await (await f.stub()).audit();
+  assert.ok(rows.some(row => row.path === "/mcp" && row.status === 403
+    && row.stage === "mcp_rpc:server/discover" && row.reason === "method_not_allowed"));
+  assert.doesNotMatch(JSON.stringify(rows), /never-log-this|Bearer |access_token|refresh_token/);
+  assert.equal(f.calls.length, 0);
+});
