@@ -22,9 +22,15 @@
 
 - Пункт 9: [PR #12](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/12) MERGED, commit `570e0e760fdae8b0b57f86bf5113fac0e700f593`; [CI #44561982653](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44561982653) SUCCESS 45/45. Cloudflare не менялся.
 
+## Пункт 10 — Windows MCP HTTP (исходник готов, live Windows не проверен)
+- `src/windows/mcp-server.mjs`: Streamable HTTP modern `2026-07-28` (headers, `_meta`, `server/discover`, stateless) и legacy `2025-11-25` (initialize, bounded sessions, GET/SSE, DELETE), `GET /device/attest` подписывает свежий challenge; Host/Origin, лимит JSON, localhost-only.
+- `src/windows/main.mjs` готов к запуску без регистрации Windows-службы; будущий установщик подаёт секрет Ed25519 из ACL-файла, а не из архива. `tools/list` пока пуст, `tools/call` запрещён до пункта 11.
+- Локально Node 24 + Miniflare **55/55** PASS, `npm run check`, Wrangler dry-run PASS. Включён интеграционный тест edge OAuth + Ed25519 + **реальный** loopback Windows-MCP HTTP, но соединение VPC в тесте имитировано, Windows не тестировалась.
+- Подробно `docs/STEP_10_REPORT.md`. Источник — `main` после слияния PR пункта 10. **Production Cloudflare не менялся**, остаётся v11; реальный Tunnel inactive.
+
 ## Что осталось
-- Пункт 7: полноценная сквозная проверка ChatGPT → VPC → Windows. Tunnel `ktk-qwen125b-friend-pc` пока inactive (0 соединений), Windows MCP отсутствует.
+- Пункт 7: полноценная сквозная проверка ChatGPT → VPC → Windows. Tunnel `ktk-qwen125b-friend-pc` пока inactive (0 соединений), Windows MCP разработан локально, но не установлен; реальное соединение отсутствует.
 - Пункт 8: HTTP origin `/device/attest` в Windows MCP (п.10), защитить локальный приватный ключ ACL и подключить pairing к установщику (п.15–16). До приёмки отмечать [ ].
-- Продолжить пункт 10 (Windows MCP), затем 11–18 (Windows runtime и установщик). **Решение владельца:** все доступные тесты делаем сами; его Windows ПК не трогаем до одной общей тестовой установки после подготовки пакета. Затем исправления и окончательный архив для ПК друга.
+- Продолжить пункт 11 (Windows tools), затем 12–18 (Windows runtime и установщик). **Решение владельца:** все доступные тесты делаем сами; его Windows ПК не трогаем до одной общей тестовой установки после подготовки пакета. Затем исправления и окончательный архив для ПК друга.
 
 План: `docs/ROADMAP_24.md`; исходная OAuth диагностика: `docs/STEP_7_REPORT.md`.
