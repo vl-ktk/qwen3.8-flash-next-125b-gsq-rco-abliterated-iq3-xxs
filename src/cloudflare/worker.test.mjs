@@ -33,9 +33,10 @@ async function fixture(t, { configured = true, state = true, upstream, ownerPass
     bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: ownerPassword, QWEN_OAUTH_GENERATION: "1" } : {},
     serviceBindings: { QWEN_MCP_ORIGIN: async request => {
       if (new URL(request.url).pathname === "/device/attest") {
-        if (attestation === "unavailable") throw Error("Host offline");
-        if (attestation === "forged") return Response.json({ device_id: deviceId, signature: randomBytes(64).toString("base64url") });
-        if (attestation === "replayed") return Response.json(await signDeviceAttestation(identity, { issuer: target, device_id: deviceId, nonce: "A".repeat(43) }));
+        const mode = typeof attestation === "function" ? attestation(request) : attestation;
+        if (mode === "unavailable") throw Error("Host offline");
+        if (mode === "forged") return Response.json({ device_id: deviceId, signature: randomBytes(64).toString("base64url") });
+        if (mode === "replayed") return Response.json(await signDeviceAttestation(identity, { issuer: target, device_id: deviceId, nonce: "A".repeat(43) }));
         return Response.json(await signDeviceAttestation(identity, { issuer: target, device_id: request.headers.get("x-qwen-device-id"), nonce: request.headers.get("x-qwen-device-nonce") }));
       }
       const body = await request.text();
@@ -694,4 +695,110 @@ test("approved Ed25519 identity survives Durable Object SQLite restart without r
   const next = await fixture(t, { paired: false, persistPath, deviceIdentity: first.identity, deviceIdOverride: device.device_id });
   const login = await next.login();
   assert.equal((await next.mcp(login.access_token)).status, 200);
+});
+
+test("step 9: Windows origin outage and reconnect preserve existing OAuth and device trust", async t => {
+  let attestation = "unavailable";
+  let originOnline = false;
+  const f = await fixture(t, { attestation: () => attestation, upstream: () => {
+    if (!originOnline) throw new Error("Cloudflare Tunnel disconnected");
+    return Response.json({ jsonrpc: "2.0", id: 1, result: { ok: true } });
+  } });
+  const login = await f.login();
+  const before = await f.mcp(login.access_token, "server/discover", {});
+  assert.equal(before.status, 503);
+  assert.deepEqual(await before.json(), { error: "device_unavailable" });
+  assert.equal(before.headers.get("cache-control"), "no-store, max-age=0");
+  assert.equal(f.calls.length, 0);
+
+  attestation = "valid";
+  const tunnelDown = await f.mcp(login.access_token, "server/discover", {});
+  assert.equal(tunnelDown.status, 503);
+  assert.deepEqual(await tunnelDown.json(), { error: "origin_unavailable" });
+  assert.equal(f.calls.length, 1);
+
+  originOnline = true;
+  const recovered = await f.mcp(login.access_token, "server/discover", {});
+  assert.equal(recovered.status, 200);
+  assert.deepEqual(await recovered.json(), { jsonrpc: "2.0", id: 1, result: { ok: true } });
+  assert.equal(recovered.headers.get("cache-control"), "no-store, max-age=0");
+  assert.equal(f.calls.length, 2);
+
+  attestation = "forged";
+  assert.equal((await f.mcp(login.access_token, "server/discover", {})).status, 503);
+  assert.equal(f.calls.length, 2);
+  attestation = "valid";
+  assert.equal((await f.mcp(login.access_token, "server/discover", {})).status, 200);
+  assert.equal(f.calls.length, 3);
+  const audit = await (await f.stub()).audit();
+  assert.ok(audit.filter(row => row.stage === "mcp_rpc:server/discover" && row.status === 503).length >= 3);
+  assert.ok(audit.filter(row => row.stage === "mcp_rpc:server/discover" && row.status === 200).length >= 2);
+  assert.doesNotMatch(JSON.stringify(audit), new RegExp(login.access_token));
+});
+
+test("step 9: invalid OAuth token and forbidden tool cannot reach recovering Tunnel", async t => {
+  let online = false;
+  const f = await fixture(t, { upstream: () => {
+    if (!online) throw new Error("Host offline");
+    return Response.json({ jsonrpc: "2.0", id: 1, result: { ok: true } });
+  } });
+  const one = await f.login();
+  for (const candidate of ["forged", one.refresh_token, ""]) {
+    const response = await f.mcp(candidate, "tools/call", { name: "system_info", arguments: {} });
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("cache-control"), "no-store, max-age=0");
+  }
+  assert.equal((await f.mcp(one.access_token, "tools/call", { name: "file_read", arguments: { path: "C:\\private" } })).status, 403);
+  assert.equal(f.calls.length, 0);
+  assert.equal((await f.mcp(one.access_token)).status, 503);
+  online = true;
+  assert.equal((await f.mcp(one.access_token)).status, 200);
+  assert.equal(f.calls.length, 2);
+  assert.equal((await f.mcp("forged")).status, 401);
+  assert.equal((await f.mcp(one.access_token, "tools/call", { name: "file_read" })).status, 403);
+  assert.equal(f.calls.length, 2);
+});
+
+test("step 9: MCP session survives temporary outage and is deletable after reconnect", async t => {
+  let online = true;
+  const session = "session-Step9SafeReconnect";
+  const f = await fixture(t, { attestation: () => online ? "valid" : "unavailable", upstream: request => {
+    if (request.method === "DELETE") return new Response(null, { status: 204 });
+    if (request.method === "GET") return new Response(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", method: "ping" })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25" } }), { headers: { "content-type": "application/json", "mcp-session-id": session } });
+  } });
+  const login = await f.login();
+  const initialized = await f.mcp(login.access_token, "initialize", {});
+  assert.equal(initialized.status, 200);
+  assert.equal(initialized.headers.get("mcp-session-id"), session);
+  online = false;
+  const down = await f.send("/mcp", { method: "GET", headers: { authorization: `Bearer ${login.access_token}`, "mcp-session-id": session, accept: "text/event-stream" } });
+  assert.equal(down.status, 503);
+  assert.equal(f.calls.length, 1);
+  online = true;
+  const resumed = await f.send("/mcp", { method: "GET", headers: { authorization: `Bearer ${login.access_token}`, "mcp-session-id": session, accept: "text/event-stream" } });
+  assert.equal(resumed.status, 200);
+  assert.equal(resumed.headers.get("content-type"), "text/event-stream");
+  assert.equal((await resumed.text()).includes("ping"), true);
+  const closed = await f.send("/mcp", { method: "DELETE", headers: { authorization: `Bearer ${login.access_token}`, "mcp-session-id": session } });
+  assert.equal(closed.status, 204);
+  assert.equal((await f.send("/mcp", { method: "GET", headers: { authorization: `Bearer ${login.access_token}`, "mcp-session-id": session } })).status, 403);
+});
+
+test("step 9: one-time OAuth code cannot replay after Windows outage", async t => {
+  let online = false;
+  const f = await fixture(t, { upstream: () => online ? Response.json({ jsonrpc: "2.0", id: 1, result: { ok: true } }) : Promise.reject(Error("Offline")) });
+  const client = await f.register();
+  const oneTimeCode = await f.code(client);
+  const first = await f.token(client, oneTimeCode);
+  assert.equal(first.status, 200);
+  const token = (await first.json()).access_token;
+  assert.equal((await f.mcp(token)).status, 503);
+  online = true;
+  assert.equal((await f.token(client, oneTimeCode)).status, 400);
+  // The OAuth provider intentionally revokes the entire grant on code replay.
+  // Reconnection alone cannot resurrect an explicitly revoked grant.
+  assert.equal((await f.mcp(token)).status, 401);
+  const renewed = await f.login();
+  assert.equal((await f.mcp(renewed.access_token)).status, 200);
 });
