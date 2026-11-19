@@ -17,7 +17,9 @@ const validPublic = value => typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.
 const validCode = value => typeof value === "string" && /^[A-HJ-NP-Z2-9]{10}$/.test(value);
 const escaped = value => String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const html = body => new Response(`<!doctype html><html lang="ru"><meta charset="utf-8"><title>Qwen — привязка устройства</title>${body}</html>`, {
-  headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "x-frame-options": "DENY", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" },
+  // Chrome requires same-origin referrer policy for a non-null Origin on form
+  // navigation, exactly as the OAuth consent flow does (v6 regression).
+  headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "same-origin", "x-frame-options": "DENY", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" },
 });
 
 async function parseJson(request) {
