@@ -24,14 +24,20 @@
 
 ## Пункт 10 — Windows MCP HTTP (исходник готов, live Windows не проверен)
 - `src/windows/mcp-server.mjs`: Streamable HTTP modern `2026-07-28` (headers, `_meta`, `server/discover`, stateless) и legacy `2025-11-25` (initialize, bounded sessions, GET/SSE, DELETE), `GET /device/attest` подписывает свежий challenge; Host/Origin, лимит JSON, localhost-only.
-- `src/windows/main.mjs` готов к запуску без регистрации Windows-службы; будущий установщик подаёт секрет Ed25519 из ACL-файла, а не из архива. `tools/list` пока пуст, `tools/call` запрещён до пункта 11.
+- `src/windows/main.mjs` готов к запуску без регистрации Windows-службы; будущий установщик подаёт секрет Ed25519 из ACL-файла, а не из архива. На тот момент `tools/list` был пуст, `tools/call` запрещён (актуальную реализацию см. п. 11 ниже).
 - Локально Node 24 + Miniflare **55/55** PASS, `npm run check`, Wrangler dry-run PASS. Включён интеграционный тест edge OAuth + Ed25519 + **реальный** loopback Windows-MCP HTTP, но соединение VPC в тесте имитировано, Windows не тестировалась.
 - Подробно `docs/STEP_10_REPORT.md`. Источник — `main` после слияния PR пункта 10. **Production Cloudflare не менялся**, остаётся v11; реальный Tunnel inactive.
 - [PR #13](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/13) **MERGED**, squash commit `d8100fa71fc6fd22a43c59a26ff0860c8f9d6f39`; [GitHub CI #44567106093](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44567106093) SUCCESS (55/55). Код лежит в `main`.
 
+## Пункт 11 — read-only Windows tools (код готов, реальная Windows на приёмке)
+- `src/windows/windows-tools.mjs`: строго фиксированные `system_info`, `process_list`, `service_status`, `app_status`; `file_read` только с явно заданными корнями (`QWEN_MCP_ALLOWED_FILE_ROOTS`), не более 32 КиБ. Запрет arbitrary PS, mutation, service control, wildcard/injection и секретных файлов. PowerShell запуск через static UTF-16 `-EncodedCommand`, аргументы JSON/Base64 в отдельном env, `shell:false`, timeout 8 секунд, output cap 40 КиБ.
+- Интегрирован реальный MCP `tools/list`/`tools/call` в `src/windows/mcp-server.mjs`, версия runtime `0.11.0`. Cloudflare OAuth scope по-прежнему фильтрует инструменты; `system_monitor` остаётся на пункт 12.
+- Node 24 + Miniflare **63/63** PASS, `npm run check`, Wrangler dry-run PASS; тесты Windows-скриптов на Linux — с инъекцией тестового runner, не настоящий PowerShell. В production Cloudflare **ничего не выкладывали**, v11 без изменений.
+- Подробнее `docs/STEP_11_REPORT.md`.
+
 ## Что осталось
 - Пункт 7: полноценная сквозная проверка ChatGPT → VPC → Windows. Tunnel `ktk-qwen125b-friend-pc` пока inactive (0 соединений), Windows MCP разработан локально, но не установлен; реальное соединение отсутствует.
-- Пункт 8: HTTP origin `/device/attest` в Windows MCP (п.10), защитить локальный приватный ключ ACL и подключить pairing к установщику (п.15–16). До приёмки отмечать [ ].
-- Продолжить пункт 11 (Windows tools), затем 12–18 (Windows runtime и установщик). **Решение владельца:** все доступные тесты делаем сами; его Windows ПК не трогаем до одной общей тестовой установки после подготовки пакета. Затем исправления и окончательный архив для ПК друга.
+- Пункт 8: HTTP origin `/device/attest` в Windows MCP реализован (п.10), остаётся защитить локальный приватный ключ ACL и подключить pairing к установщику (п.15–16). До приёмки отмечать [ ].
+- Продолжить пункт 12 (Windows monitoring), затем 13–18 (Windows runtime и установщик). **Решение владельца:** все доступные тесты делаем сами; его Windows ПК не трогаем до одной общей тестовой установки после подготовки пакета. Затем исправления и окончательный архив для ПК друга.
 
 План: `docs/ROADMAP_24.md`; исходная OAuth диагностика: `docs/STEP_7_REPORT.md`.
