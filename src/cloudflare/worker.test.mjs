@@ -7,6 +7,7 @@ import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";
 import { buildSync } from "esbuild";
 import { generateDeviceIdentity, signDeviceAttestation } from "../windows/device-identity.mjs";
 import { listenWindowsMcp } from "../windows/mcp-server.mjs";
+import { createWindowsToolRegistry } from "../windows/windows-tools.mjs";
 
 const testBundle = buildSync({
   entryPoints: [fileURLToPath(new URL("./test-runtime.mjs", import.meta.url))],
@@ -808,7 +809,9 @@ test("step 9: one-time OAuth code cannot replay after Windows outage", async t =
 test("step 10: real loopback Windows server interoperates with OAuth gateway and Ed25519 VPC proof", async t => {
   const identity = await generateDeviceIdentity();
   const deviceId = randomBytes(24).toString("base64url");
-  const server = await listenWindowsMcp({ port: 0, identity, deviceId });
+  const server = await listenWindowsMcp({ port: 0, identity, deviceId, toolRegistry: createWindowsToolRegistry({
+    runWindowsQuery: async (name, args) => ({ query: name, params: args, source: "windows-test-double" }),
+  }) });
   t.after(async () => { if (server.listening) await new Promise(resolve => server.close(resolve)); });
   const loopback = `http://127.0.0.1:${server.address().port}`;
   let attests = 0;
@@ -843,12 +846,15 @@ test("step 10: real loopback Windows server interoperates with OAuth gateway and
   assert.deepEqual((await discover.json()).result.supportedVersions, ["2026-07-28", "2025-11-25"]);
   const listed = await f.mcp(access_token, "tools/list", modernParams, { ...modernHeaders, "mcp-method": "tools/list" });
   assert.equal(listed.status, 200, await listed.clone().text());
-  assert.deepEqual((await listed.json()).result.tools, []);
+  assert.deepEqual((await listed.json()).result.tools.map(tool => tool.name), ["system_info", "process_list", "service_status", "app_status"]);
+  const called = await f.mcp(access_token, "tools/call", { ...modernParams, name: "system_info", arguments: {} }, { ...modernHeaders, "mcp-method": "tools/call", "mcp-name": "system_info" });
+  assert.equal(called.status, 200, await called.clone().text());
+  assert.equal(JSON.parse((await called.json()).result.content[0].text).source, "windows-test-double");
   const initialize = await f.mcp(access_token, "initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } }, { "mcp-protocol-version": "2025-11-25", accept: "application/json, text/event-stream" });
   assert.equal(initialize.status, 200, await initialize.clone().text());
   const sid = initialize.headers.get("mcp-session-id");
   assert.match(sid, /^[A-Za-z0-9_-]{32}$/);
   assert.equal((await f.send("/mcp", { method: "DELETE", headers: { authorization: `Bearer ${access_token}`, "mcp-session-id": sid } })).status, 204);
-  assert.equal(attests, 4);
-  assert.equal(calls, 4);
+  assert.equal(attests, 5);
+  assert.equal(calls, 5);
 });
