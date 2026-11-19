@@ -9,7 +9,7 @@ import { createWindowsToolRegistry } from "./windows-tools.mjs";
 const MODERN = "2026-07-28";
 const LEGACY = "2025-11-25";
 const SUPPORTED = [MODERN, LEGACY];
-const SERVER_INFO = Object.freeze({ name: "qwen125b-windows-mcp", version: "0.11.0" });
+const SERVER_INFO = Object.freeze({ name: "qwen125b-windows-mcp", version: "0.12.0" });
 const INSTRUCTIONS = "Read-only Windows tools only. No arbitrary PowerShell, writes, process controls or service changes. File read requires configured allowlisted directories.";
 const MAX_BODY = 64 * 1024;
 const SESSION_TTL = 24 * 60 * 60 * 1000;

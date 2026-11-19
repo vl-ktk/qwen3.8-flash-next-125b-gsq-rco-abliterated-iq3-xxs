@@ -8,10 +8,10 @@ import { listenWindowsMcp } from "./mcp-server.mjs";
 
 test("read-only allowlist has stable schemas; no arbitrary command, script, write or service control", () => {
   const tools = createWindowsToolRegistry();
-  assert.deepEqual(tools.list().map(item => item.name), ["system_info", "process_list", "service_status", "app_status"]);
+  assert.deepEqual(tools.list().map(item => item.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status"]);
   assert.equal(tools.has("powershell"), false);
   assert.equal(tools.has("file_read"), false); // default-deny until installer configures roots
-  for (const name of ["system_info", "process_list", "service_status", "app_status"]) {
+  for (const name of ["system_info", "system_monitor", "process_list", "service_status", "app_status"]) {
     const definition = tools.list().find(item => item.name === name);
     assert.equal(definition.annotations.readOnlyHint, true);
     assert.equal(definition.inputSchema.additionalProperties, false);
@@ -42,6 +42,8 @@ test("injection, wildcard, arbitrary args and resource-abuse inputs fail before 
   const tools = createWindowsToolRegistry({ runWindowsQuery: async () => { called++; return {}; } });
   const bad = [
     ["system_info", { command: "whoami" }],
+    ["system_monitor", { command: "Get-Process" }],
+    ["system_monitor", { interval: 1 }],
     ["process_list", { limit: 0 }],
     ["process_list", { limit: 5000 }],
     ["process_list", { name: "*" }],

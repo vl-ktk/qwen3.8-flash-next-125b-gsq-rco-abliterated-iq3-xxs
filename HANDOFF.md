@@ -1,6 +1,6 @@
 # HANDOFF — Qwen 125B / Windows MCP
 
-Дата: 2026-11-19. Источник: `vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs`, `main`. Рабочую Cloudflare v11 в ходе пункта 8 не менять.
+Дата: 2026-11-19. Источник: `vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs`, `main`. Рабочую Cloudflare v11 до согласованной установки не менять.
 
 ## Рабочая версия / откат
 - Cloudflare Worker `qwen125b-mcp` **v11**: version `8e719c62-5316-434d-b092-fd0f3cdc81d5`, deployment `5667dd47-6d10-47d8-a9dc-ab8d262047f1` (100% при последней проверке). OAuth code→token подтверждён владельцем; полный MCP Windows-origin пока не проверен.
@@ -36,9 +36,14 @@
 - Подробнее `docs/STEP_11_REPORT.md`.
 - [PR #14](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/14) **MERGED**, commit `ccb8a8a1754b6d2a0a746b963125cd4630405cd6`; [CI #44572384611](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44572384611) SUCCESS (63/63).
 
+## Пункт 12 — мониторинг Windows (исходник готов, live Windows не проверен)
+- `src/windows/monitoring.mjs` и `system_monitor` (через `windows-tools.mjs`): CPU%, RAM, фиксированные тома с объёмом/свободным местом, до 5 системных событий за 24 часа (только безопасные метаданные); NVIDIA GPU/VRAM/температура только через проверенный путь `nvidia-smi`. Нет телеметрии — `null` / `unavailable`; температура CPU недоступна без надёжного датчика; тип SSD/HDD не установлен стандартным Win32_LogicalDisk.
+- MCP runtime `0.12.0`. **73/73** автоматических тестов PASS; `npm run check` PASS; Wrangler `npm run build` dry-run PASS. Проверка Windows PowerShell и `nvidia-smi` только на моках Linux. GitHub исходник и отчёт: `docs/STEP_12_REPORT.md`.
+- **Рабочий Cloudflare Worker v11 не изменён** (подтверждено read-only API). Для закрытия шага: реальная Windows + показания на железе + сквозная связь при единой установке.
+
 ## Что осталось
 - Пункт 7: полноценная сквозная проверка ChatGPT → VPC → Windows. Tunnel `ktk-qwen125b-friend-pc` пока inactive (0 соединений), Windows MCP разработан локально, но не установлен; реальное соединение отсутствует.
 - Пункт 8: HTTP origin `/device/attest` в Windows MCP реализован (п.10), остаётся защитить локальный приватный ключ ACL и подключить pairing к установщику (п.15–16). До приёмки отмечать [ ].
-- Продолжить пункт 12 (Windows monitoring), затем 13–18 (Windows runtime и установщик). **Решение владельца:** все доступные тесты делаем сами; его Windows ПК не трогаем до одной общей тестовой установки после подготовки пакета. Затем исправления и окончательный архив для ПК друга.
+- Продолжить пункт 13 (Windows administration), затем 14–18 (Windows runtime и установщик). **Решение владельца:** все доступные тесты делаем сами; его Windows ПК не трогаем до одной общей тестовой установки после подготовки пакета. Затем исправления и окончательный архив для ПК друга.
 
 План: `docs/ROADMAP_24.md`; исходная OAuth диагностика: `docs/STEP_7_REPORT.md`.
