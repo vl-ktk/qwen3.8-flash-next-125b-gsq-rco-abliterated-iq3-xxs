@@ -20,6 +20,8 @@
 - Cloudflare API: v11 100% (`5667dd47-6d10-47d8-a9dc-ab8d262047f1`), те же 4 bindings. Tunnel inactive, 0 connections. Прямой HTTPS curl: connection timeout / HTTP 000 — **живого HTTPS PASS нет**. Не объявлять пункт 9 end-to-end завершённым.
 - Подробно `docs/STEP_9_REPORT.md`. Реальная приёмка с Windows origin запланирована одним этапом на ПК владельца; рабочий Cloudflare Worker не обновлялся.
 
+- Пункт 9: [PR #12](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/12) MERGED, commit `570e0e760fdae8b0b57f86bf5113fac0e700f593`; [CI #44561982653](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44561982653) SUCCESS 45/45. Cloudflare не менялся.
+
 ## Что осталось
 - Пункт 7: полноценная сквозная проверка ChatGPT → VPC → Windows. Tunnel `ktk-qwen125b-friend-pc` пока inactive (0 соединений), Windows MCP отсутствует.
 - Пункт 8: HTTP origin `/device/attest` в Windows MCP (п.10), защитить локальный приватный ключ ACL и подключить pairing к установщику (п.15–16). До приёмки отмечать [ ].
