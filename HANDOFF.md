@@ -34,6 +34,7 @@
 - Интегрирован реальный MCP `tools/list`/`tools/call` в `src/windows/mcp-server.mjs`, версия runtime `0.11.0`. Cloudflare OAuth scope по-прежнему фильтрует инструменты; `system_monitor` остаётся на пункт 12.
 - Node 24 + Miniflare **63/63** PASS, `npm run check`, Wrangler dry-run PASS; тесты Windows-скриптов на Linux — с инъекцией тестового runner, не настоящий PowerShell. В production Cloudflare **ничего не выкладывали**, v11 без изменений.
 - Подробнее `docs/STEP_11_REPORT.md`.
+- [PR #14](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/14) **MERGED**, commit `ccb8a8a1754b6d2a0a746b963125cd4630405cd6`; [CI #44572384611](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44572384611) SUCCESS (63/63).
 
 ## Что осталось
 - Пункт 7: полноценная сквозная проверка ChatGPT → VPC → Windows. Tunnel `ktk-qwen125b-friend-pc` пока inactive (0 соединений), Windows MCP разработан локально, но не установлен; реальное соединение отсутствует.
