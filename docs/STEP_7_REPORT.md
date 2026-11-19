@@ -2,7 +2,7 @@
 
 Дата: **19.11.2026**, Europe/Bucharest. Основание: [Issue #1](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/issues/1).
 
-**Актуальный статус после исправления ChatGPT OAuth consent (19.11.2026):** Worker **v6 `1a90b1b6-1bb3-4e0a-b48d-705395bf2149`**, deployment **`9f53720f-17b5-4d68-afef-2cc61cdbebdb`** (100%). Ошибка `invalid_origin` возникала **после** отправки пароля из браузерной формы; `Referrer-Policy: no-referrer` заменён на `same-origin` (без ослабления строгой проверки Origin/PKCE). [PR #4](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/4), main `3814c994a5df8e4414a7bf8c387277c167316acd`; [CI 44511720844](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44511720844) PASS: 23/23 теста, npm ci/check/build. Пароль остался binding `secret_text` без чтения его значения; DO/VPC сохранены. Live Chrome: `protected`, OAuth discovery, `invalid_token` без Bearer — PASS. **Повторный живой ChatGPT consent → code/token после фикса пока не проходили, Windows MCP origin ещё не готов: пункт 7 [ ], далее 8–24 [ ].** Предыдущие статусы ниже исторические; подробности в последнем разделе.
+**Актуальный статус после повторного живого отказа (19.11.2026):** после **нового** подключения ChatGPT POST согласия продолжал возвращать `{"error":"invalid_request"}`. Это отличается от прежнего `invalid_origin`; точный stage в v6 не раскрывался. Опубликована **v7 `3b9cc9c3-8b0b-4d9b-a467-79cc023de696`**, deployment **`3a833183-c78b-4cc2-8d3b-ba1903103840`** (100%). v7 возвращает только безопасные коды `reason` для consent ошибок, без cookies/паролей/токенов; CSRF/PKCE и owner checks не ослаблены. [PR #5](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/5) merged main `c21743889e9914755237923f7e59d41cfb876aba`, [CI 44514600926](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44514600926) PASS: 25/25 тестов, npm ci/check/build. Cloudflare secret `secret_text` и SQLite DO/VPC bindings сохранены. **Корневая причина ещё не подтверждена; повторный живой POST после v7, OAuth code/token и Windows MCP ещё не проверены. Шаг 7 [ ], 8–24 [ ].** История ниже — предыдущие стадии; актуальные детали в последнем разделе.
 
 ## Источник и границы
 
@@ -165,3 +165,27 @@ Read-only API перепроверил:
 **Чего ещё не проверяли:** живой повторный browser POST consent с владельческим паролем, получение authorization code и token реальным коннектором ChatGPT; связь Worker→Tunnel→Windows MCP отсутствует. Эти проверки не заменяются 23 локальными интеграционными тестами. Пункт ROADMAP 7 остаётся открытым. Следующее действие — заново пройти подключение ChatGPT по `https://qwen125b-mcp.vl-ktk.workers.dev/mcp`; **пароль менять не нужно**. Если подключение пройдёт, отдельно проверить вызов инструмента с учётом недоступного Windows upstream.
 
 **Откат:** выбрать Cloudflare версию **v5 `3e6fee92-a2bf-476f-8f86-c8c6b9b8f41a`** на 100%, предыдущий deployment `04507195-c5d1-4e32-81a8-463f15d6d7c1`. v5 сохраняет дефект Origin. v4 `f84c4b6d-5769-49b9-ae73-b87c5130e396` не использовать: в её истории был небезопасный `plain_text` binding. Не удалять DO, secrets и VPC; GitHub rollback отдельно.
+
+## Дополнение — диагностический Worker v7 после нового `invalid_request` (19.11.2026)
+
+Владелец повторил подключение ChatGPT с нуля и снова получил `{"error":"invalid_request"}` **после ввода пароля**. Открытая форма корректно показывала клиента `ChatGPT`, возврат `https://chatgpt.com/connector_platform_oauth_redirect`, разрешения `qwen:read` и `qwen:files:read`, S256 PKCE и resource Qwen. `invalid_origin` больше не наблюдалось. Прежняя гипотеза об устаревшей форме опровергнута сообщением владельца. В v6 идентичный `invalid_request` мог возникать в нескольких местах, поэтому причина остаётся неопределённой без безопасной детализации.
+
+Изменения `src/cloudflare/oauth.mjs`: на отказ POST `/authorize` могут возвращаться только предопределённые `reason`:
+
+| Reason | Что означает |
+|---|---|
+| `consent_cookie_missing` | браузерная binding cookie не пришла |
+| `consent_cookie_mismatch` | cookie не соответствует consent handle |
+| `consent_expired` | транзакция отсутствует, просрочена или уже использована |
+| `consent_handle_missing`, `consent_handle_invalid` | некорректный одноразовый handle |
+| `consent_decision_missing` | форма отправлена без явного `decision=approve` или `deny` |
+| `consent_duplicate_field` | дублируются singleton поля формы |
+| `consent_auth_record_invalid`, `consent_completion_invalid`, `consent_session_invalid` | отказ проверки record / финализации / другая ошибка session validation |
+
+Коды не раскрывают значение secret, cookie, handle, client ID, access token или OAuth code; handler не ослабляет Origin/CSRF binding/PKCE и не заменяет ошибку успешным ответом.
+
+Проверки GitHub: [PR #5](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/5) MERGED, source main `c21743889e9914755237923f7e59d41cfb876aba`. [CI 44514600926](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44514600926) job `edge` SUCCESS: npm ci, check, test **25/25 pass, 0 fail**, build dry-run. Новые тесты покрывают фактический ChatGPT запрос с двумя scope и безопасные причины отсутствия cookie/decision и истечения consent.
+
+Перед публикацией: Cloudflare v6 `1a90b1b6-1bb3-4e0a-b48d-705395bf2149`, deployment `9f53720f-17b5-4d68-afef-2cc61cdbebdb` (100%). Загружены четыре ESM файла из GitHub main, standalone stage Worker **v7 `3b9cc9c3-8b0b-4d9b-a467-79cc023de696`**; strict binding inheritance. Получены GET `versions/{id}` и `settings`: `QWEN_OAUTH_OWNER_PASSWORD` остаётся `secret_text`, `QWEN_OAUTH_STATE` → DO `162cfb67fccc40f5907b0093b7a7f944`, `QWEN_MCP_ORIGIN` → VPC `01a1f103-bc58-78c2-97ef-91331e10775e`, `QWEN_OAUTH_GENERATION` сохранён. Перед deploy v6 перепроверена и не менялась. После deploy GET подтвердил **v7 100%**, deployment **`3a833183-c78b-4cc2-8d3b-ba1903103840`** (11:26 UTC), все bindings сохранены. Не читали секреты или OAuth storage contents, не трогали Windows, не меняли другие Cloudflare Workers.
+
+**Статус:** v7 — диагностика, а не доказанное исправление underlying проблемы. Нужна ещё одна свежая попытка ChatGPT OAuth владельцем; ответ `reason` позволит выбрать конкретную безопасную правку. При успехе — проверить code/token; полноту Windows MCP не обещать до Tunnel/ПК. Откат: Cloudflare v6 `1a90b1b6-1bb3-4e0a-b48d-705395bf2149` / deployment `9f53720f-17b5-4d68-afef-2cc61cdbebdb`; v4 `plain_text` не использовать, DO/секреты не удалять. Пункт 7 [ ].
