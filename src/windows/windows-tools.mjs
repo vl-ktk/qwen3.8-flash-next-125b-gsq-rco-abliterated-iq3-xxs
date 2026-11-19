@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { constants } from "node:fs";
 import { realpath, stat, open } from "node:fs/promises";
 import path from "node:path";
+import { collectWindowsMonitoring, queryNvidiaGpus } from "./monitoring.mjs";
 
 const execFileAsync = promisify(execFile);
 const MAX_READ = 32 * 1024;
@@ -59,12 +60,39 @@ $procs = @(Get-Process | Where-Object { $_.ProcessName -eq $a.name } |
 [pscustomobject]@{ name = $a.name; running = ($procs.Count -gt 0); instances = $procs } |
   ConvertTo-Json -Depth 5 -Compress
 `,
+  system_monitor: PREFIX + `
+$os = Get-CimInstance -ClassName Win32_OperatingSystem
+$cpuLoad = $null
+try {
+  $cpu = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -ErrorAction Stop
+  if ($null -ne $cpu) { $cpuLoad = $cpu.PercentProcessorTime }
+} catch { $cpuLoad = $null }
+$disks = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' |
+  ForEach-Object { [pscustomobject]@{ drive = $_.DeviceID;
+    total_bytes = $_.Size; free_bytes = $_.FreeSpace } })
+$events = @()
+$eventsStatus = 'ok'
+try {
+  $events = @(Get-WinEvent -FilterHashtable @{LogName='System'; Level=@(1,2);
+      StartTime=(Get-Date).AddHours(-24)} -MaxEvents 5 -ErrorAction Stop |
+    ForEach-Object { [pscustomobject]@{event_id=$_.Id; provider=$_.ProviderName;
+      at=$_.TimeCreated.ToUniversalTime().ToString('o'); level=$_.LevelDisplayName} })
+} catch { $eventsStatus = 'unavailable_or_empty' }
+[pscustomobject]@{
+  cpu_usage_percent = $cpuLoad
+  ram_total_bytes = ([int64]$os.TotalVisibleMemorySize * 1024)
+  ram_free_bytes = ([int64]$os.FreePhysicalMemory * 1024)
+  fixed_disks = $disks
+  events = $events
+  events_status = $eventsStatus
+} | ConvertTo-Json -Depth 6 -Compress
+`,
 });
 
 function validate(name, args) {
   if (!isRecord(args)) throw safeError("invalid_arguments");
   const keys = Object.keys(args);
-  if (name === "system_info") {
+  if (name === "system_info" || name === "system_monitor") {
     if (keys.length) throw safeError("invalid_arguments");
     return {};
   }
@@ -102,7 +130,7 @@ export async function runPowerShellQuery(name, args, { platform = process.platfo
   let result;
   try {
     result = await invoke(exe, ["-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", script], {
-      windowsHide: true, shell: false, timeout: 8000, maxBuffer: MAX_TEXT, encoding: "utf8", env,
+      windowsHide: true, shell: false, timeout: name === "system_monitor" ? 12000 : 8000, maxBuffer: MAX_TEXT, encoding: "utf8", env,
     });
   } catch { throw safeError("powershell_unavailable"); }
   if (typeof result.stdout !== "string" || Buffer.byteLength(result.stdout, "utf8") > MAX_TEXT) throw safeError("powershell_unavailable");
@@ -113,6 +141,11 @@ export async function runPowerShellQuery(name, args, { platform = process.platfo
 const DEFINITIONS = Object.freeze({
   system_info: {
     name: "system_info", description: "Read Windows version, processor, core count and installed RAM. No changes.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  system_monitor: {
+    name: "system_monitor", description: "Read current CPU load, RAM usage, fixed-volume free space, recent System event IDs, and NVIDIA GPU/VRAM/temperature when supported. Missing sensors are reported as unavailable.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
@@ -162,9 +195,9 @@ async function readAllowedFile(filePath, roots) {
   } finally { await fd.close(); }
 }
 
-export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery } = {}) {
+export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery, readNvidia = queryNvidiaGpus } = {}) {
   if (!Array.isArray(allowedFileRoots) || allowedFileRoots.some(root => typeof root !== "string" || !path.isAbsolute(root))) throw safeError("invalid_file_roots");
-  const available = ["system_info", "process_list", "service_status", "app_status", ...(allowedFileRoots.length ? ["file_read"] : [])];
+  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", ...(allowedFileRoots.length ? ["file_read"] : [])];
   return {
     list: () => available.map(name => structuredClone(DEFINITIONS[name])),
     has: name => available.includes(name),
@@ -172,6 +205,7 @@ export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQue
       if (!available.includes(name)) throw safeError("unknown_tool");
       const params = validate(name, args);
       if (name === "file_read") return readAllowedFile(params.path, allowedFileRoots);
+      if (name === "system_monitor") return collectWindowsMonitoring({ readSystem: () => runWindowsQuery(name, params), readGpu: readNvidia });
       return runWindowsQuery(name, params);
     },
   };
