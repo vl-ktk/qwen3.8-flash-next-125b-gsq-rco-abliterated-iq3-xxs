@@ -19,6 +19,10 @@
 - Проверки PowerShell и `nvidia-smi` сделаны на моках под Linux, а не на реальном Windows ПК. Доступность счётчика CPU, журнала событий, конкретных путей `nvidia-smi`, GPU/температур и достоверность показаний требуют единой финальной проверки на Windows владельца.
 - Рабочий Cloudflare Worker **v11 не менялся**. Windows MCP, Tunnel и реальные ответы от железа не проверены. Не объявлять пункт 12 полностью закрытым до Windows приёмки.
 
+## GitHub
+
+[PR #15](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/15) **MERGED** (squash commit `4a7fa899a992a52e54eb185c6148176d5f7d5383`); [CI #44579086990](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44579086990) SUCCESS (npm ci, check, tests, build).
+
 ## Справочные источники реализации
 
 - NVIDIA `nvidia-smi` field queries и CSV: официальная NVIDIA System Management Interface документация.
