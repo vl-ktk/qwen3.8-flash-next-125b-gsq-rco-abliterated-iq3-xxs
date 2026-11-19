@@ -4,6 +4,17 @@ export const ISSUER = "https://qwen125b-mcp.vl-ktk.workers.dev";
 export const RESOURCE = ISSUER + "/mcp";
 export const SCOPES = Object.freeze(["qwen:read", "qwen:files:read"]);
 const COOKIE_BASE = "__Host-qwen125b-consent";
+const CONSENT_PROOF_TTL = 600;
+
+// Chrome can suppress cookies even on the consent page. A separate one-time,
+// same-origin form proof provides a strict CSRF alternative without extending
+// an OAuth transaction's lifetime or relaxing Origin / PKCE / password checks.
+function digestEquals(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== 64 || b.length !== 64) return false;
+  let difference = 0;
+  for (let i = 0; i < 64; i++) difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return difference === 0;
+}
 const PUBLIC_HEADERS = {
   "cache-control": "no-store, max-age=0",
   "x-content-type-options": "nosniff",
@@ -130,13 +141,17 @@ async function authorize(request, env, kv) {
     validateAuthRequest(auth);
     const client = await api.lookupClient(auth.clientId);
     const consent = await api.beginConsent(auth);
+    const formProof = [...crypto.getRandomValues(new Uint8Array(32))]
+      .map(byte => byte.toString(16).padStart(2, "0")).join("");
+    await kv.put(`consent-proof:${await hash(consent.handle)}`, await hash(formProof),
+      { expirationTtl: CONSENT_PROOF_TTL });
     const headers = new Headers(consent.headers);
     headers.set("content-type", "text/html; charset=utf-8");
     headers.set("content-security-policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Qwen 125B MCP</title>
 <h1>Доступ к Qwen 125B MCP</h1><p>Клиент: ${esc(client.clientName || auth.clientId)}</p>
 <p>Возврат: ${esc(auth.redirectUri)}</p><p>Разрешайте доступ только после проверки клиента и адреса возврата.</p>
-<form method="post" action="/authorize"><input type="hidden" name="handle" value="${esc(consent.handle)}">
+<form method="post" action="/authorize"><input type="hidden" name="handle" value="${esc(consent.handle)}"><input type="hidden" name="form_proof" value="${formProof}">
 ${auth.scope.map(scope => `<p><label><input type="checkbox" name="scope" value="${esc(scope)}" checked>${esc(scope)}</label></p>`).join("")}
 <p><label>Пароль владельца <input type="password" name="password" autocomplete="current-password" required maxlength="1024"></label></p>
 <button name="decision" value="approve">Разрешить</button><button name="decision" value="deny" formnovalidate>Отказать</button></form></html>`;
@@ -145,17 +160,46 @@ ${auth.scope.map(scope => `<p><label><input type="checkbox" name="scope" value="
   if (request.method !== "POST") return json(405, { error: "method_not_allowed" }, { allow: "GET, POST" });
   if (request.headers.get("origin") !== ISSUER) return json(403, { error: "invalid_origin" });
   if (!request.headers.get("content-type")?.startsWith("application/x-www-form-urlencoded")) return json(415, { error: "invalid_content_type" });
-  const form = new URLSearchParams(await readBody(request, 16384));
-  for (const name of ["handle", "password", "decision"]) if (form.getAll(name).length > 1) return json(400, { error: "invalid_request", reason: "consent_duplicate_field" });
+  const formBody = await readBody(request, 16384);
+  const form = new URLSearchParams(formBody);
+  for (const name of ["handle", "password", "decision", "form_proof"]) if (form.getAll(name).length > 1) return json(400, { error: "invalid_request", reason: "consent_duplicate_field" });
   const handle = form.get("handle");
   if (typeof handle !== "string" || handle.length > 128) return json(400, { error: "invalid_request", reason: "consent_handle_invalid" });
   let preview;
-  try { preview = await openTransaction(kv, request, COOKIE_BASE, handle, "consent"); }
-  catch (error) { const failure = consentSessionFailure(error); if (failure) return failure; throw error; }
+  let consentRequest = request;
+  const handleDigest = await hash(handle);
+  try { preview = await openTransaction(kv, consentRequest, COOKIE_BASE, handle, "consent"); }
+  catch (error) {
+    const failure = consentSessionFailure(error);
+    if (failure?.status !== 400 || error.description?.includes("not started in this browser") !== true) {
+      if (failure) return failure;
+      throw error;
+    }
+    // Fallback accepts only a form actually served by this host, submitted
+    // by a same-origin browser navigation. Other cookie failures still fail closed.
+    const proof = form.get("form_proof");
+    if (request.headers.get("sec-fetch-site") !== "same-origin" || !/^[a-f0-9]{64}$/.test(proof ?? "")) {
+      return json(400, { error: "invalid_request", reason: "consent_cookie_missing" });
+    }
+    const expected = await kv.get(`consent-proof:${handleDigest}`);
+    if (!digestEquals(await hash(proof), expected)) {
+      return json(400, { error: "invalid_request", reason: "consent_form_proof_invalid" });
+    }
+    const boundHeaders = new Headers(request.headers);
+    boundHeaders.set("cookie", `${COOKIE_BASE}-${handleDigest.slice(0, 16)}=${handleDigest}`);
+    consentRequest = new Request(request.url, { method: "POST", headers: boundHeaders, body: formBody });
+    try { preview = await openTransaction(kv, consentRequest, COOKIE_BASE, handle, "consent"); }
+    catch (retryError) {
+      const retryFailure = consentSessionFailure(retryError);
+      if (retryFailure) return retryFailure;
+      throw retryError;
+    }
+  }
   try { validateAuthRequest(preview.record.request); }
   catch (error) { if (error instanceof AuthorizationError) return json(400, { error: "invalid_request", reason: "consent_auth_record_invalid" }); throw error; }
   if (form.get("decision") === "deny") {
-    const denied = await api.denyConsent(request, handle);
+    const denied = await api.denyConsent(consentRequest, handle);
+    await kv.delete(`consent-proof:${handleDigest}`);
     const headers = new Headers(denied.headers);
     headers.set("location", denied.redirectTo);
     return new Response(null, { status: 302, headers });
@@ -167,7 +211,8 @@ ${auth.scope.map(scope => `<p><label><input type="checkbox" name="scope" value="
   if (!scopes.length || scopes.some(s => !preview.record.request.scope.includes(s))) return json(400, { error: "invalid_scope" });
   let approved, done;
   try {
-    approved = await api.approveConsent(request, handle, { scope: scopes });
+    approved = await api.approveConsent(consentRequest, handle, { scope: scopes });
+    await kv.delete(`consent-proof:${handleDigest}`);
     done = await api.completeAuthorization({
       request: approved.request, userId: "qwen-owner", metadata: {}, scope: scopes,
       props: { project: "qwen125b-mcp", generation: env.QWEN_OAUTH_GENERATION },
