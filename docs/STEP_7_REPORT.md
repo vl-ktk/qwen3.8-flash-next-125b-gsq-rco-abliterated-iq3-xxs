@@ -4,7 +4,7 @@
 
 **Исторический статус v8:** живой Chrome после повторного OAuth POST показал `{"error":"invalid_request","reason":"consent_cookie_missing"}`: браузерная cookie не пришла на backend. Конкретно почему — хранение, истечение или пересылка — по этому ответу не доказано. Исправлена возможность подтверждения, когда cookie не пришёл, с отдельным одноразовым проверяемым 256-битным form proof + строгими Origin / `Sec-Fetch-Site`. Cloudflare Worker **v8 `62961a30-37dc-4a49-a8f0-f787e8989b3b` (100%)**, deployment **`b18e7b13-b9ed-4955-accf-e09290cab8b1`**; [PR #6](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/6), merge main `db1601d79feb19d4ccdf53be36bd3b72583dcb75`; [CI 44524088590](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44524088590) PASS **27/27**, check, build. Три исходных Cloudflare ресурса и secret `secret_text` сохранены. Живой Chrome GET v8 показал корректную ChatGPT consent форму с hidden form proof и обоими scope; **живой POST/code/token после v8 пока не проверен**. Шаг 7 [ ], 8–24 [ ]; отчёт v8 в конце документа.
 
-**Текущая работа:** подтверждены и исправляются expiry/replay классификация consent и блокировка callback политикой CSP в Chrome. См. дополнение об исследовании v8 в конце документа. Живая авторизация владельцем пока не подтверждена.
+**Актуально: v9 опубликована 100%**, version `416972ed-8eab-4354-bfbe-3c1745828126`, deployment `1fe57ebb-1438-4190-85fb-d45ef670d416`. PR #7 MERGED, CI 44529378371 SUCCESS, 32/32 тестов. Живые cookie/no-cookie, expiry recovery, Chrome callback и реальный owner **code → token** проверены. OAuth исправлен; полное MCP-подключение с инструментами ещё не завершено (403 на следующем методе, Windows MCP/Tunnel отсутствуют). Подробности ниже.
 
 ## Источник и границы
 
@@ -236,3 +236,48 @@ Cloudflare SQL query API допускает чтение схемы, но зап
 Почему прежние тесты не выявили проблему: они вручную передавали cookie заголовком; cookie-free позитивный тест завершался немедленно; expiry тест истекал только transaction с сохранённой cookie. При replay cookie-free test даже ожидал `consent_form_proof_invalid`. Miniflare HTTP dispatcher не исполняет браузерный CSP. Новые тесты добавляют недостающие состояния, а реальный Chrome и опубликованный endpoint проверяются отдельно.
 
 Публикация новой версии и финальный owner code/token будут записаны после фактического выполнения. До этого полное исправление подключения не объявляется. Windows MCP/Tunnel и модель по-прежнему не готовы и не подменяются фиктивным успешным origin.
+
+### Публикация v9 и реальные проверки
+
+- [PR #7](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/7) MERGED; source commit `22d6665b0b7bcffdf81cb9170c1537756e28d8a1`, main merge `771155b50565bbc1cce566dcf40eced6458304f2`.
+- [CI 44529378371](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44529378371) SUCCESS: npm ci/check/test **32/32**/dry-run build.
+- Через versions API загружены только четыре production ESM, с `bindings_inherit=strict`. Два неизменённых модуля дополнительно проверены SHA-256 перед upload. Новый DO namespace или secret не создавались; class name и migration tag сохранены.
+- Перед активацией GET version подтвердил существующий DO `162cfb67fccc40f5907b0093b7a7f944`, VPC `01a1f103-bc58-78c2-97ef-91331e10775e`, password `secret_text` и generation `1`. Active v8 перепроверена непосредственно перед deployment.
+- Активна **v9 `416972ed-8eab-4354-bfbe-3c1745828126` (100%)**, deployment **`1fe57ebb-1438-4190-85fb-d45ef670d416`**, 19.11.2026 **13:03:38 UTC**. GET после переключения подтвердил сохранность bindings.
+- Первое обращение сразу после API-активации ещё обслужил старый DO-код в ходе распространения deployment. Дождались реального `x-qwen-oauth-stage: consent_issued`, нового CSP и expiry UI; одного статуса deployment недостаточно. Последующее чтение `/content/v2` подтвердило совпадение SHA-256 всех четырёх модулей с Git.
+
+Проверки **опубликованной v9**:
+
+| Действие | Реальный результат |
+|---|---|
+| Свежий consent, cookie передана | Проверка transaction пройдена, остановка до пароля на ожидаемом `consent_decision_missing` |
+| Свежий consent без cookie, с исходным proof | Проверка transaction/proof пройдена, тот же ожидаемый результат |
+| Исходная просроченная тестовая форма v8 | Теперь `consent_expired`, а не `consent_form_proof_invalid` |
+| Просроченный same-origin browser POST с исходными OAuth parameters | **303**, `consent_expired_restart`; новый GET **200**, новый handle, password input пустой |
+| Chrome: новая форма, «Отказать» | **302 → реальная навигация к зарегистрированному внешнему callback**, state/issuer сохранены, прежней CSP блокировки нет |
+| `/mcp` без Bearer и с поддельным Bearer | **401 invalid_token** |
+| Owner-readable SQL audit | Таблица создана, SELECT через Cloudflare API возвращает только фиксированные статусы/этапы, 0 записей секретов |
+
+Новые диагностические DCR клиенты созданы только в Qwen для тестов; действующие подключения не удалялись. Агент не вводил и не читал пароль владельца; до финального входа использовался только один заведомо неверный тестовый пароль для проверки отказа на v8. Затем владелец самостоятельно ввёл существующий пароль в свежую форму ChatGPT; положительный code/token подтверждён журналом ниже. Пароль агенту не передавался.
+
+**Откат текущего исправления:** вернуть на 100% прежнюю v8 `62961a30-37dc-4a49-a8f0-f787e8989b3b` (предыдущий deployment `b18e7b13-b9ed-4955-accf-e09290cab8b1`); она содержит подтверждённые дефекты. Дополнительный резерв v7 `3b9cc9c3-8b0b-4d9b-a467-79cc023de696`, deployment `3a833183-c78b-4cc2-8d3b-ba1903103840`. Не откатывать на v4, не удалять namespace/секрет/VPC/существующий OAuth KV. Новая audit-таблица не мешает старому коду и не требует удаления.
+
+### Финальный реальный вход владельца в ChatGPT
+
+Владелец попросил переоткрыть форму. Из существующей страницы Qwen-плагина ChatGPT запущен **новый** OAuth state и новая S256 challenge, затем владелец сам ввёл неизменённый пароль и нажал «Разрешить». Агент не читал password field и не перехватывал тело POST.
+
+SELECT собственной audit-таблицы через авторизованный Cloudflare API зафиксировал:
+
+| UTC, 19.11.2026 | Endpoint | Status | Этап |
+|---|---|---|---|
+| 13:07:53.464 | `/authorize` GET | 200 | `consent_issued` |
+| 13:08:04.964 | `/authorize` POST | **302** | **`code_issued`** |
+| 13:08:08.047 | `/oauth/token` POST | **200** | **`token_endpoint_success`** |
+| 13:08:08.861 | `/mcp` | 401 | `invalid_token`, начальная проверка клиента |
+| 13:08:08.959 | `/mcp` | **403** | `method_not_allowed` после OAuth |
+
+**Подтверждено:** пароль принят, consent завершён, code выдан, ChatGPT совершил успешный обмен code на token, callback вернулся в ChatGPT и OAuth popup закрылся. Пользователь ответил «готово». Ошибки `invalid_origin`, `consent_cookie_missing`, `consent_form_proof_invalid` в этой свежей попытке не возникли. Это реальный опубликованный OAuth, не локальный stub.
+
+**Не подтверждено полное MCP-подключение:** после OAuth клиент отправил метод, запрещённый текущим gateway. Журнал намеренно не содержит request body, поэтому точное имя метода этой попытки не утверждается. В интерфейсе карточки приложения ChatGPT отображается «Для этого приложения нет доступных инструментов»; кнопка установки плагина остаётся. Windows MCP, Tunnel и инструменты ещё не готовы. Это отдельный следующий блокер MCP transport/capability discovery, а не ошибка пароля или proof. Не добавлялся фиктивный MCP-сервер/успешный origin и не ослаблялся default-deny ради индикатора подключения.
+
+**По пункту 7:** OAuth часть исправлена и проверена живым владельцем. Полный критерий «ChatGPT подключён к защищённому MCP и видит реальные инструменты» ещё не выполнен; пункт 7 остаётся [ ]. Перед окончательной приёмкой нужен реализованный доступный MCP origin и проверка реальных initialize/capability/tools запросов ChatGPT по утверждённой архитектуре. Пункты 8–24 не реализовывались самовольно. Пароль/секрет, существующие grants других клиентов и данные не сбрасывались.
