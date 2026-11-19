@@ -81,7 +81,7 @@ export const server = new OAuthAuthorizationServer({
 });
 
 export function isConfigured(env) {
-  return typeof env.QWEN_OAUTH_OWNER_PASSWORD === "string" && env.QWEN_OAUTH_OWNER_PASSWORD.length >= 32
+  return typeof env.QWEN_OAUTH_OWNER_PASSWORD === "string" && env.QWEN_OAUTH_OWNER_PASSWORD.length >= 5
     && /^[1-9][0-9]{0,8}$/.test(env.QWEN_OAUTH_GENERATION ?? "");
 }
 

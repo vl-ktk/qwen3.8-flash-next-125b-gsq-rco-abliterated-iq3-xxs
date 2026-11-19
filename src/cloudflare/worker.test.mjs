@@ -18,7 +18,7 @@ const password = randomBytes(32).toString("hex");
 const verifier = randomBytes(32).toString("base64url");
 const codeChallenge = createHash("sha256").update(verifier).digest("base64url");
 
-async function fixture(t, { configured = true, state = true, upstream } = {}) {
+async function fixture(t, { configured = true, state = true, upstream, ownerPassword = password } = {}) {
   const calls = [];
   const mf = new Miniflare(convertV4MiniflareOptions({
     name: "qwen-test", modules: true,
@@ -26,7 +26,7 @@ async function fixture(t, { configured = true, state = true, upstream } = {}) {
     compatibilityDate: "2026-11-17", compatibilityFlags: ["global_fetch_strictly_public"], log: new Log(LogLevel.ERROR),
     outboundService: () => { throw Error("External network forbidden in tests"); },
     durableObjects: state ? { QWEN_OAUTH_STATE: { className: "TestOAuthState", useSQLite: true } } : {},
-    bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: password, QWEN_OAUTH_GENERATION: "1" } : {},
+    bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: ownerPassword, QWEN_OAUTH_GENERATION: "1" } : {},
     serviceBindings: { QWEN_MCP_ORIGIN: async request => {
       const body = await request.text();
       calls.push({ url: request.url, method: request.method, headers: Object.fromEntries(request.headers), body });
@@ -93,6 +93,17 @@ test("original unprovisioned gateway remains locked, including forged credential
   assert.equal((await f.send("/mcp/tools/call")).status, 401);
   assert.equal((await f.send("/admin")).status, 404);
   assert.equal(f.calls.length, 0);
+});
+
+test("owner password minimum is five characters; shorter passwords leave OAuth locked", async t => {
+  const short = await fixture(t, { ownerPassword: "abcd" });
+  assert.deepEqual(await (await short.send("/__edge_status")).json(), { state: "locked", endpoint: "mcp" });
+  assert.equal((await short.send("/oauth/register", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 503);
+  const accepted = await fixture(t, { ownerPassword: "abcde" });
+  assert.deepEqual(await (await accepted.send("/__edge_status")).json(), { state: "protected", endpoint: "mcp" });
+  const started = await accepted.begin(await accepted.register());
+  const response = await accepted.approve(started, { password: "abcde" });
+  assert.equal(response.status, 302, await response.clone().text());
 });
 
 test("discovery publishes canonical Qwen resource, DCR and S256 only", async t => {
