@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir, mkdtemp } from "node:fs/promises";
 import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";
 import { buildSync } from "esbuild";
 
@@ -18,9 +18,10 @@ const password = randomBytes(32).toString("hex");
 const verifier = randomBytes(32).toString("base64url");
 const codeChallenge = createHash("sha256").update(verifier).digest("base64url");
 
-async function fixture(t, { configured = true, state = true, upstream, ownerPassword = password } = {}) {
+async function fixture(t, { configured = true, state = true, upstream, ownerPassword = password, persistPath } = {}) {
   const calls = [];
-  const mf = new Miniflare(convertV4MiniflareOptions({
+  const mf = new Miniflare({
+    ...convertV4MiniflareOptions({
     name: "qwen-test", modules: true,
     script: testBundle,
     compatibilityDate: "2026-11-17", compatibilityFlags: ["global_fetch_strictly_public"], log: new Log(LogLevel.ERROR),
@@ -33,8 +34,10 @@ async function fixture(t, { configured = true, state = true, upstream, ownerPass
       if (upstream) return upstream(request, body);
       return Response.json({ jsonrpc: "2.0", id: 1, result: { ok: true } });
     } },
-  }));
-  t.after(() => mf.dispose());
+  }), ...(persistPath ? { resourcePersistencePath: persistPath } : {}) });
+  let disposed = false;
+  const close = async () => { if (!disposed) { disposed = true; await mf.dispose(); } };
+  t.after(close);
   const send = (path, init) => mf.dispatchFetch(target + path, { redirect: "manual", ...init });
   const stub = async () => (await mf.getDurableObjectNamespace("QWEN_OAUTH_STATE")).getByName("qwen125b-oauth-v1");
   const register = async (extra = {}) => {
@@ -78,7 +81,7 @@ async function fixture(t, { configured = true, state = true, upstream, ownerPass
     method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + token, ...headers },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
-  return { mf, calls, send, register, begin, approve, code, token, login, mcp, stub };
+  return { mf, calls, send, register, begin, approve, code, token, login, mcp, stub, close };
 }
 
 test("original unprovisioned gateway remains locked, including forged credentials", async t => {
@@ -189,9 +192,21 @@ test("consent GET preserves same-origin Origin for browser form POST", async t =
   assert.equal(started.response.status, 200, started.html);
   // Referrer-Policy: no-referrer makes browsers send Origin: null on navigation form POSTs.
   assert.equal(started.response.headers.get("referrer-policy"), "same-origin");
-  assert.ok(started.html.includes('<form method="post" action="/authorize">'));
+  assert.ok(started.html.includes('<form method="post" action="/authorize?'));
   assert.equal((await f.approve(started, {}, { origin: "null" })).status, 403);
   assert.equal((await f.approve(started)).status, 302);
+});
+
+test("consent CSP permits only self and the registered callback origin, including Chrome redirects", async t => {
+  const f = await fixture(t);
+  const started = await f.begin(await f.register());
+  assert.equal(started.response.headers.get("content-security-policy"),
+    "default-src 'none'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'");
+  const hostile = "https://evil;script-src.test/callback";
+  const client = await f.register({ redirect_uris: [hostile] });
+  const rejected = await f.begin(client, { redirect_uri: hostile });
+  assert.equal(rejected.response.status, 400);
+  assert.equal(f.calls.length, 0);
 });
 
 test("ChatGPT two-scope browser consent grants a code with an explicit submit button", async t => {
@@ -235,7 +250,7 @@ test("cookie-blocked Chrome form uses same-origin one-time proof for ChatGPT OAu
   assert.equal(token.status, 200, await token.clone().text());
   assert.ok((await token.json()).access_token);
   const replay = await f.send("/authorize", options);
-  assert.deepEqual(await replay.json(), { error: "invalid_request", reason: "consent_form_proof_invalid" });
+  assert.deepEqual(await replay.json(), { error: "invalid_request", reason: "consent_expired" });
 });
 
 test("cookie fallback rejects missing, forged, cross-origin or mismatched browser proof", async t => {
@@ -254,6 +269,81 @@ test("cookie fallback rejects missing, forged, cross-origin or mismatched browse
     { ...headers, cookie: started.cookie.split("=")[0] + "=" + "f".repeat(64) });
   assert.deepEqual(await mismatch.json(), { error: "invalid_request", reason: "consent_cookie_mismatch" });
   assert.equal((await f.approve(started, { form_proof: formProof }, headers)).status, 302);
+});
+
+test("expired cookie-free form is classified as expiry, never proof corruption", async t => {
+  const f = await fixture(t);
+  const started = await f.begin(await f.register(), { scope: "qwen:read qwen:files:read" });
+  const proof = /name="form_proof" value="([a-f0-9]{64})"/.exec(started.html)[1];
+  // Model the actual browser at t >= 600 s: cookie omitted, hidden inputs retained,
+  // both persisted records expired. v8 returns consent_form_proof_invalid here.
+  await (await f.stub()).expire("transaction:");
+  await (await f.stub()).expire("consent-proof:");
+  const response = await f.approve(started, { form_proof: proof }, { cookie: "", "sec-fetch-site": "same-origin" });
+  assert.deepEqual(await response.json(), { error: "invalid_request", reason: "consent_expired" });
+  assert.equal(response.headers.get("location"), null);
+  assert.equal(f.calls.length, 0);
+});
+
+test("expired browser POST starts a fresh GET, never accepts the old password/proof", async t => {
+  const f = await fixture(t);
+  const client = await f.register();
+  const started = await f.begin(client, { scope: "qwen:read qwen:files:read" });
+  const proof = /name="form_proof" value="([a-f0-9]{64})"/.exec(started.html)[1];
+  await (await f.stub()).expire("transaction:");
+  await (await f.stub()).expire("consent-proof:");
+  const path = "/authorize?" + started.params;
+  const post = await f.send(path, { method: "POST", headers: {
+    origin: target, "sec-fetch-site": "same-origin", accept: "text/html", "content-type": "application/x-www-form-urlencoded",
+  }, body: new URLSearchParams({ handle: started.handle, form_proof: proof, password, scope: "qwen:read", decision: "approve" }).toString() });
+  assert.equal(post.status, 303);
+  assert.equal(post.headers.get("location"), path);
+  assert.equal(post.headers.get("x-qwen-oauth-stage"), "consent_expired_restart");
+  assert.ok(!post.headers.get("location").includes("password"));
+  const fresh = await f.begin(client, { scope: "qwen:read qwen:files:read" });
+  assert.notEqual(fresh.handle, started.handle);
+  assert.ok(!fresh.html.includes(password));
+  assert.equal((await f.approve(fresh, { password: "" })).status, 403);
+  assert.equal((await f.approve(fresh)).status, 302);
+});
+
+test("proof storage absence is distinguished from a mismatching live proof", async t => {
+  const f = await fixture(t);
+  const started = await f.begin(await f.register());
+  const proof = /name="form_proof" value="([a-f0-9]{64})"/.exec(started.html)[1];
+  await (await f.stub()).expire("consent-proof:");
+  const response = await f.approve(started, { form_proof: proof }, { cookie: "", "sec-fetch-site": "same-origin" });
+  assert.deepEqual(await response.json(), { error: "invalid_request", reason: "consent_form_proof_missing" });
+  assert.equal((await f.approve(started)).status, 302); // independent valid cookie path
+});
+
+test("consent survives SQLite persistence and a full runtime restart, with both scopes and no cookie", async t => {
+  const parent = fileURLToPath(new URL("../../.generated/", import.meta.url));
+  await mkdir(parent, { recursive: true });
+  const persistPath = await mkdtemp(parent + "consent-persist-");
+  const first = await fixture(t, { persistPath });
+  const client = await first.register();
+  const started = await first.begin(client, { scope: "qwen:read qwen:files:read" });
+  const proof = /name="form_proof" value="([a-f0-9]{64})"/.exec(started.html)[1];
+  await first.close();
+  const second = await fixture(t, { persistPath });
+  const response = await second.send("/authorize", { method: "POST", headers: {
+    "content-type": "application/x-www-form-urlencoded", origin: target, "sec-fetch-site": "same-origin",
+  }, body: new URLSearchParams([
+    ["handle", started.handle], ["form_proof", proof], ["scope", "qwen:read"], ["scope", "qwen:files:read"],
+    ["password", password], ["decision", "approve"],
+  ]).toString() });
+  assert.equal(response.status, 302, await response.clone().text());
+  const code = new URL(response.headers.get("location")).searchParams.get("code");
+  const token = await second.token(client, code);
+  assert.equal(token.status, 200, await token.clone().text());
+  assert.equal((await token.json()).scope, "qwen:read qwen:files:read");
+  const audit = await (await second.stub()).audit();
+  assert.ok(audit.some(row => row.stage === "consent_issued"));
+  assert.ok(audit.some(row => row.stage === "code_issued"));
+  assert.ok(audit.some(row => row.stage === "token_endpoint_success"));
+  const serialized = JSON.stringify(audit);
+  for (const secret of [password, started.handle, proof, code, client.client_id]) assert.ok(!serialized.includes(secret));
 });
 
 test("consent failures identify only safe stage codes, never cookies or secrets", async t => {

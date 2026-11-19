@@ -49,19 +49,43 @@ export default {
 };
 
 export class QwenOAuthState extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    // Owner-readable operational evidence, with no cookies, handles, proofs,
+    // passwords, codes, tokens, client IDs or request bodies. Existing KV is untouched.
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS qwen_oauth_audit_v1 (
+      at_ms INTEGER NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL,
+      stage TEXT NOT NULL, reason TEXT NOT NULL
+    )`);
+  }
+
+  async recordResult(request, response) {
+    const path = new URL(request.url).pathname;
+    let reason = "";
+    if (response.status >= 400 && response.headers.get("content-type")?.startsWith("application/json")) {
+      const error = await response.clone().json().catch(() => ({}));
+      const candidate = error.reason ?? error.error;
+      if (typeof candidate === "string" && /^[a-z_]{1,80}$/.test(candidate)) reason = candidate;
+    }
+    const stage = response.headers.get("x-qwen-oauth-stage") ?? (path === "/mcp" ? "mcp" : "protocol");
+    this.ctx.storage.sql.exec("INSERT INTO qwen_oauth_audit_v1 VALUES (?, ?, ?, ?, ?)", Date.now(), path, response.status, stage, reason);
+    return response;
+  }
+
   async fetch(request) {
     const direct = publicRoute(request, this.env);
     if (direct) return direct;
     try {
-      if (new URL(request.url).pathname === "/mcp") return await this.mcp(request);
+      if (new URL(request.url).pathname === "/mcp") return await this.recordResult(request, await this.mcp(request));
       const response = await this.ctx.storage.transaction(tx => oauthRequest(request.clone(), this.env, new OAuthStorage(tx)));
       // Expiry is enforced on every read; the alarm also reclaims old records.
       if (await this.ctx.storage.getAlarm() === null) await this.ctx.storage.setAlarm(Date.now() + 3600000);
-      return secure(response);
-    } catch (error) { return errorResponse(error); }
+      return secure(await this.recordResult(request, response));
+    } catch (error) { return this.recordResult(request, errorResponse(error)); }
   }
 
   async alarm() {
+    this.ctx.storage.sql.exec("DELETE FROM qwen_oauth_audit_v1 WHERE at_ms < ?", Date.now() - 7 * 86400000);
     const cursor = await this.ctx.storage.get("cleanup-cursor");
     const records = await this.ctx.storage.list({ limit: 256, ...(cursor ? { startAfter: cursor } : {}) });
     const expired = [...records.entries()].filter(([, r]) => r?.expiration && r.expiration <= Date.now() / 1000).map(([key]) => key);
