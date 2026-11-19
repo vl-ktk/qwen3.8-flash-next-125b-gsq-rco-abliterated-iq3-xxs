@@ -35,6 +35,8 @@
 - Нет живой связи с Windows через настоящий Cloudflare Tunnel, нет реальной ChatGPT MCP-приёмки; всё это входит в одну комплексную проверку на ПК владельца после сборки установщика.
 - Следующий пункт 12: мониторинг CPU/RAM/GPU/SSD. Пункты 13–14: lifecycle, аудит и политика привилегий. Пункт 15–18: установщик/поддержка.
 
+- [PR #14](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/14) **MERGED**, commit `ccb8a8a1754b6d2a0a746b963125cd4630405cd6`; [CI #44572384611](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44572384611) SUCCESS (63/63).
+
 ## Версии и откат
 
 - Production Worker `qwen125b-mcp` остаётся **v11**, version `8e719c62-5316-434d-b092-fd0f3cdc81d5`, deployment `5667dd47-6d10-47d8-a9dc-ab8d262047f1`. В этом пункте не публиковался и не менялся.
