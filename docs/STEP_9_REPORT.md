@@ -28,6 +28,10 @@
 
 Итог: **45/45 тестов PASS**, `npm run check` PASS, `CI=1 WRANGLER_SEND_METRICS=false npm run build` PASS (Wrangler dry-run, без публикации). 
 
+## GitHub и CI
+
+[PR #12](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/12) объединён с `main`, commit `570e0e760fdae8b0b57f86bf5113fac0e700f593`; [GitHub Actions run #44561982653](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44561982653) — SUCCESS (45/45, check, build). Cloudflare production не изменён.
+
 ## Живые проверки и ограничения
 
 - Cloudflare API подтвердил действующий deployment, 4 bindings и отсутствие Tunnel connections. Это **проверка конфигурации**, не успешная HTTPS/MCP приёмка.
