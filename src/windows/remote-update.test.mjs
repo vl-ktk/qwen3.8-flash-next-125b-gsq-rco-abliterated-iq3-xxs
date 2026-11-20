@@ -164,6 +164,11 @@ test("privileged errors have bounded stage codes and explicit rollback status, n
   rootCause.stderr = "powershell exception\r\nKTK_UPDATE_FAILURE:maintenance:tunnel_health_failed\r\n";
   rootCause.stdout = "Original files restored\r\nKTK_RECOVERY_LOCKED:mcp_selftest_failed\r\n";
   assert.deepEqual(classifyUpdateFailure(rootCause), { code: "maintenance_tunnel_health_failed", recovery: "locked" });
+  rootCause.stderr += "KTK_UPDATE_CONTEXT:maintain:278:methodinvocationexception\r\n";
+  assert.deepEqual(classifyUpdateFailure(rootCause), { code: "maintenance_tunnel_health_failed", recovery: "locked",
+    diagnostic: { script: "maintain", line: 278, type: "methodinvocationexception" } });
+  assert.deepEqual(classifyUpdateFailure({ stderr: "KTK_UPDATE_FAILURE:maintenance:powershell_exception\nKTK_UPDATE_CONTEXT:unknown:0:exception\n" }),
+    { code: "maintenance_powershell_exception", recovery: "unknown", diagnostic: { script: "unknown", line: 0, type: "exception" } });
   assert.deepEqual(classifyUpdateFailure({ stderr: "arbitrary message", code: "ETIMEDOUT", killed: true }),
     { code: "maintenance_timeout", recovery: "unknown" });
   assert.deepEqual(classifyUpdateFailure({ stderr: "KTK_UPDATE_FAILURE:maintenance:secret/user" }),
@@ -206,11 +211,14 @@ test("PowerShell privileged update uses SYSTEM gate and packaged maintenance, ne
   assert.match(script, /ZipFile\]::OpenRead/);
   assert.match(script, /Apply-KTKUnifiedRelease\.ps1/);
   assert.match(script, /KTK_UPDATE_FAILURE/);
+  assert.match(script, /KTK_UPDATE_CONTEXT/);
   assert.match(unified, /-Action Update -PackagePath \$PackagePath -Resume -UpdaterApproved/);
   assert.match(unified, /local-ai-opt-in\.json/);
   assert.match(unified, /if \(\$doLocalAI\) \{/);
   assert.match(unified, /KTK_MCP_UPDATE_ONLY/);
   assert.match(unified, /KTKQwenUserUpdater/);
+  assert.doesNotMatch(unified, /\[IO\.File\]::Replace\(\$next,\s*\$active,\s*\$null\)/);
+  assert.match(unified, /\[IO\.File\]::Replace\(\$next,\s*\$active,\s*\$backup\)/);
   assert.match(maintenance, /updater_approval_requires_localsystem_live_update/);
   assert.match(maintenance, /KTK_RECOVERY_OK/);
   assert.match(maintenance, /try \{\s*# Stopping services is part of the transaction:[\s\S]*?Set-ManualStopped/);

@@ -90,12 +90,28 @@ if ($doLocalAI) {
 # Verified user payload is retained for a logged-out opted-in user's next session.
 $job = @{schema=1;version=$Version;attempt=[guid]::NewGuid().ToString('N');manifest_sha256=(Get-FileHash -LiteralPath (Join-Path $release 'MANIFEST.json') -Algorithm SHA256).Hash.ToLowerInvariant()} | ConvertTo-Json -Compress
 $next = Join-Path $public ('job-' + [guid]::NewGuid().ToString('N') + '.tmp')
+$backup = Join-Path $public ('job-prev-' + [guid]::NewGuid().ToString('N') + '.bak')
 [IO.File]::WriteAllText($next, $job)
 $active = Join-Path $public 'job.json'
-if (Test-Path -LiteralPath $active) { [IO.File]::Replace($next, $active, $null) }
+if ((Test-Path -LiteralPath $active) -and
+    ((-not (Test-Path -LiteralPath $active -PathType Leaf)) -or
+     ([IO.File]::GetAttributes($active) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { throw 'unified_update_job_untrusted' }
+# Windows PowerShell 5.1/.NET Framework requires a non-empty backup path.
+if (Test-Path -LiteralPath $active) { [IO.File]::Replace($next, $active, $backup) }
 else { [IO.File]::Move($next, $active) }
+# Do not keep legacy explicit write grants inherited from a replaced job.
+& icacls.exe $active '/reset' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'unified_update_job_acl_reset_failed' }
 & icacls.exe $active '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'unified_update_job_acl_failed' }
+$jobAcl = Get-Acl -LiteralPath $active
+if (-not $jobAcl.AreAccessRulesProtected) { throw 'unified_update_job_acl_untrusted' }
+foreach ($ace in $jobAcl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+        $ace.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544','S-1-5-32-545')) { throw 'unified_update_job_acl_untrusted' }
+}
+[IO.File]::WriteAllText($active, $job)
+if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force -ErrorAction Stop }
 & schtasks.exe /run /tn $taskName | Out-Null
 # A non-logged-in user means task is deferred to its next logon trigger.
 # Failure here never undoes the already healthy MCP or destroys model bytes.

@@ -48,5 +48,20 @@ $phase = 'maintenance'
     $code = [string]$_.Exception.Message
     if ($code -cnotmatch '^[a-z][a-z0-9_]{2,63}$') { $code = 'powershell_exception' }
     [Console]::Error.WriteLine(('KTK_UPDATE_FAILURE:{0}:{1}' -f $phase, $code))
+    # Record only the known KTK script category, line and .NET exception type.
+    # Raw messages/paths are deliberately never exposed over MCP.
+    $scriptName = [IO.Path]::GetFileName([string]$_.InvocationInfo.ScriptName)
+    $scriptKey = switch -CaseSensitive ($scriptName) {
+        'Run-KTKRemoteUpdate.ps1' { 'remote' }
+        'Apply-KTKUnifiedRelease.ps1' { 'unified' }
+        'Maintain-KTKMCP.ps1' { 'maintain' }
+        'Verify-KTKPackage.ps1' { 'verify' }
+        default { 'unknown' }
+    }
+    $line = [int]$_.InvocationInfo.ScriptLineNumber
+    if ($line -lt 1 -or $line -gt 9999) { $line = 0 }
+    $type = [string]$_.Exception.GetType().Name
+    if ($type -cnotmatch '^[A-Za-z]{3,40}$') { $type = 'exception' }
+    [Console]::Error.WriteLine(('KTK_UPDATE_CONTEXT:{0}:{1}:{2}' -f $scriptKey, $line, $type.ToLowerInvariant()))
     exit 1
 }
