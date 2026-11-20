@@ -5,6 +5,7 @@ param([Parameter(Mandatory=$true)][string]$PackagePath,
       [Parameter(Mandatory=$true)][string]$Version)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+try {
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne 'S-1-5-18') { throw 'unified_update_requires_system' }
 if ($Version -cnotmatch '^0\.18\.[1-9][0-9]{0,3}$') { throw 'unified_update_version_invalid' }
 $manifestPath = Join-Path $PackagePath 'MANIFEST.json'
@@ -90,16 +91,52 @@ if ($doLocalAI) {
 # Verified user payload is retained for a logged-out opted-in user's next session.
 $job = @{schema=1;version=$Version;attempt=[guid]::NewGuid().ToString('N');manifest_sha256=(Get-FileHash -LiteralPath (Join-Path $release 'MANIFEST.json') -Algorithm SHA256).Hash.ToLowerInvariant()} | ConvertTo-Json -Compress
 $next = Join-Path $public ('job-' + [guid]::NewGuid().ToString('N') + '.tmp')
+$backup = Join-Path $public ('job-prev-' + [guid]::NewGuid().ToString('N') + '.bak')
 [IO.File]::WriteAllText($next, $job)
 $active = Join-Path $public 'job.json'
-if (Test-Path -LiteralPath $active) { [IO.File]::Replace($next, $active, $null) }
+if ((Test-Path -LiteralPath $active) -and
+    ((-not (Test-Path -LiteralPath $active -PathType Leaf)) -or
+     ([IO.File]::GetAttributes($active) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { throw 'unified_update_job_untrusted' }
+# Windows PowerShell 5.1/.NET Framework requires a non-empty backup path.
+if (Test-Path -LiteralPath $active) { [IO.File]::Replace($next, $active, $backup) }
 else { [IO.File]::Move($next, $active) }
+# Do not keep legacy explicit write grants inherited from a replaced job.
+& icacls.exe $active '/reset' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'unified_update_job_acl_reset_failed' }
 & icacls.exe $active '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'unified_update_job_acl_failed' }
+$jobAcl = Get-Acl -LiteralPath $active
+if (-not $jobAcl.AreAccessRulesProtected) { throw 'unified_update_job_acl_untrusted' }
+foreach ($ace in $jobAcl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+        $ace.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544','S-1-5-32-545')) { throw 'unified_update_job_acl_untrusted' }
+}
+[IO.File]::WriteAllText($active, $job)
+if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force -ErrorAction Stop }
 & schtasks.exe /run /tn $taskName | Out-Null
 # A non-logged-in user means task is deferred to its next logon trigger.
 # Failure here never undoes the already healthy MCP or destroys model bytes.
 Write-Output 'KTK_USER_UPDATE_QUEUED'
 } else {
     Write-Output 'KTK_MCP_UPDATE_ONLY'
+}
+} catch {
+    # The already-installed updater (e.g. 0.18.12) knows only the safe
+    # KTK_UPDATE_FAILURE marker. Preserve meaningful symbolic exceptions,
+    # but encode non-symbolic PowerShell errors inside this trusted payload
+    # before the old wrapper collapses them to "powershell_exception".
+    $reason = [string]$_.Exception.Message
+    if ($reason -cmatch '^[a-z][a-z0-9_]{2,63}$') { throw }
+    $scriptName = [IO.Path]::GetFileName([string]$_.InvocationInfo.ScriptName)
+    $scriptKey = switch -CaseSensitive ($scriptName) {
+        'Maintain-KTKMCP.ps1' { 'maintain' }
+        'Apply-KTKUnifiedRelease.ps1' { 'unified' }
+        'Verify-KTKPackage.ps1' { 'verify' }
+        default { 'other' }
+    }
+    $line = [int]$_.InvocationInfo.ScriptLineNumber
+    if ($line -lt 1 -or $line -gt 9999) { $line = 0 }
+    $type = [string]$_.Exception.GetType().Name
+    if ($type -cnotmatch '^[A-Za-z]{3,40}$') { $type = 'exception' }
+    throw ('ps_{0}_{1}_{2}' -f $scriptKey, $line, $type.ToLowerInvariant())
 }

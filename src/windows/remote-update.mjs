@@ -20,12 +20,15 @@ export function classifyUpdateFailure(error) {
   const stderr = typeof error?.stderr === "string" ? error.stderr : "";
   const stdout = typeof error?.stdout === "string" ? error.stdout : "";
   const marker = stderr.match(/^KTK_UPDATE_FAILURE:([a-z][a-z_]{2,32}):([a-z][a-z0-9_]{2,63})\r?$/m);
+  const context = stderr.match(/^KTK_UPDATE_CONTEXT:(remote|unified|maintain|verify|unknown):([0-9]{1,4}):([a-z]{3,40})\r?$/m);
   const recovered = /^KTK_RECOVERY_OK\r?$/m.test(stdout) ? "healthy" :
     /^KTK_RECOVERY_LOCKED:[a-z][a-z0-9_]{2,63}\r?$/m.test(stdout) ? "locked" : "unknown";
   const code = marker ? `${marker[1]}_${marker[2]}` :
     error?.killed || error?.signal === "SIGTERM" || error?.code === "ETIMEDOUT" ? "maintenance_timeout" :
     error?.code === "ENOENT" ? "powershell_unavailable" : "maintenance_failed";
-  return { code, recovery: recovered };
+  return { code, recovery: recovered,
+    ...(marker && context ? { diagnostic: { script: context[1], line: Number(context[2]), type: context[3] } } : {}),
+  };
 }
 
 // Never accept a command, executable path, target directory, or arbitrary host
@@ -192,7 +195,12 @@ export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1",
         result => report({ status: result?.status === "user_pending" ? "user_pending" : "updated", version: offer.version, started_at: startedAt }),
         error => report({ status: "failed", version: offer.version,
           code: typeof error?.code === "string" && /^[a-z][a-z0-9_]{2,120}$/.test(error.code) ? error.code : "update_failed",
-          recovery: ["healthy", "locked"].includes(error?.recovery) ? error.recovery : "unknown" }),
+          recovery: ["healthy", "locked"].includes(error?.recovery) ? error.recovery : "unknown",
+          ...(error?.diagnostic && ["remote", "unified", "maintain", "verify", "unknown"].includes(error.diagnostic.script) &&
+            Number.isInteger(error.diagnostic.line) && error.diagnostic.line >= 0 && error.diagnostic.line <= 9999 &&
+            typeof error.diagnostic.type === "string" && /^[a-z]{3,40}$/.test(error.diagnostic.type)
+            ? { diagnostic: error.diagnostic } : {}),
+        }),
       ).catch(() => { state = { status: "failed", code: "status_unavailable" }; });
     } catch { if (!res.writableEnded) reply(400, { error: "invalid_request" }); }
   });
