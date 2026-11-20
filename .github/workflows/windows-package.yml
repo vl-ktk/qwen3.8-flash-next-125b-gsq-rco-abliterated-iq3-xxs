@@ -91,6 +91,9 @@ jobs:
           if ($status -ne 1) { throw 'SYSTEM preflight did not reject unprivileged updater' }
           if ($output -notmatch 'KTK_UPDATE_FAILURE:preflight:updater_requires_localsystem') { throw 'Missing safe failure code' }
           if ($output -notmatch 'KTK_UPDATE_CONTEXT:remote:[0-9]{1,4}:[a-z]{3,40}') { throw 'Missing safe script and exception context' }
+          # GitHub's PowerShell wrapper exits with LASTEXITCODE after the step.
+          # The expected negative-path child exit is not a failure of this test.
+          $global:LASTEXITCODE = 0
   windows-preflight:
     needs: windows-payload
     runs-on: windows-latest
