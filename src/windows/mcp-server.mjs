@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import { signDeviceAttestation } from "./device-identity.mjs";
 import { createWindowsToolRegistry } from "./windows-tools.mjs";
+import { createOriginVerifier } from "./origin-auth.mjs";
 
 // This is the loopback transport, not a remotely exposed HTTP service. The
 // Cloudflare gateway enforces OAuth + scopes and a fresh signed device proof.
@@ -9,7 +10,7 @@ import { createWindowsToolRegistry } from "./windows-tools.mjs";
 const MODERN = "2026-07-28";
 const LEGACY = "2025-11-25";
 const SUPPORTED = [MODERN, LEGACY];
-const SERVER_INFO = Object.freeze({ name: "qwen125b-windows-mcp", version: "0.13.0" });
+const SERVER_INFO = Object.freeze({ name: "qwen125b-windows-mcp", version: "0.14.0" });
 const INSTRUCTIONS = "Read-only Windows tools only. No arbitrary PowerShell, writes, process controls or service changes. File read requires configured allowlisted directories.";
 const MAX_BODY = 64 * 1024;
 const SESSION_TTL = 24 * 60 * 60 * 1000;
@@ -44,7 +45,7 @@ function headerValue(raw) {
   } catch { return null; }
 }
 
-async function parseBody(req) {
+async function readRawBody(req) {
   let size = 0;
   const chunks = [];
   for await (const chunk of req) {
@@ -52,8 +53,7 @@ async function parseBody(req) {
     if (size > MAX_BODY) throw Error("body_too_large");
     chunks.push(chunk);
   }
-  try { return JSON.parse(Buffer.concat(chunks).toString("utf-8")); }
-  catch { throw Error("invalid_json"); }
+  return Buffer.concat(chunks);
 }
 
 function requireMeta(body, req) {
@@ -66,11 +66,19 @@ function requireMeta(body, req) {
   return client === undefined || (record(client) && typeof client.name === "string" && typeof client.version === "string");
 }
 
-export function createWindowsMcpServer({ port = 8765, host = "127.0.0.1", identity = null, deviceId = null, toolRegistry = createWindowsToolRegistry() } = {}) {
+export function createWindowsMcpServer({
+  port = 8765, host = "127.0.0.1", identity = null, deviceId = null,
+  toolRegistry = createWindowsToolRegistry(), gatewayKey,
+  // Injection for isolated transport tests. Runtime always requires gatewayKey.
+  originVerifier = gatewayKey ? createOriginVerifier(gatewayKey) : () => false,
+  emergencyLocked = async () => false,
+  auditEvent = () => {},
+} = {}) {
   // Do not let configuration expose this origin on a LAN. Tunnel connects to loopback.
   if (host !== "127.0.0.1" || !Number.isInteger(port) || port < 0 || port > 65535) throw Error("invalid_bind_address");
   const sessions = new Map();
   const streams = new Map();
+  const audit = event => { try { auditEvent({ at: new Date().toISOString(), event }); } catch { /* auditing cannot disclose details */ } };
 
   const session = id => {
     if (!id || !SESSION_PATTERN.test(id)) return null;
@@ -95,9 +103,20 @@ export function createWindowsMcpServer({ port = 8765, host = "127.0.0.1", identi
       const url = new URL(req.url, `http://127.0.0.1:${actualPort}`);
       if (url.search || url.hash) return send(res, 400, { error: "invalid_request" });
 
+      // Emergency lock is checked per-request: revocation takes effect without
+      // a service restart and fail-closes if the lock state cannot be read.
+      let locked;
+      try { locked = await emergencyLocked(); } catch { locked = true; }
+      if (locked) { audit("emergency_locked"); return send(res, 503, { error: "emergency_locked" }); }
+
       if ((url.pathname === "/healthz" || url.pathname === "/health") && req.method === "GET") {
         return send(res, 200, { status: "ready", transport: "streamable-http", model: "not_checked", version: SERVER_INFO.version });
       }
+      if (url.pathname !== "/device/attest" && url.pathname !== "/mcp") return send(res, 404, { error: "not_found" });
+      let rawBody;
+      try { rawBody = await readRawBody(req); }
+      catch (error) { return send(res, error.message === "body_too_large" ? 413 : 400, { error: "invalid_request" }); }
+      if (!originVerifier(req.headers, req.method, url.pathname, rawBody)) { audit("origin_auth_denied"); return send(res, 403, { error: "origin_auth_denied" }); }
       if (url.pathname === "/device/attest" && req.method === "GET") {
         const id = req.headers["x-qwen-device-id"];
         const nonce = req.headers["x-qwen-device-nonce"];
@@ -132,7 +151,7 @@ export function createWindowsMcpServer({ port = 8765, host = "127.0.0.1", identi
         return send(res, 406, { error: "not_acceptable" });
       }
       let body;
-      try { body = await parseBody(req); }
+      try { body = JSON.parse(rawBody.toString("utf8")); }
       catch (error) { return send(res, error.message === "body_too_large" ? 413 : 400, rpcError(null, -32700, "Invalid JSON request")); }
       if (!record(body) || body.jsonrpc !== "2.0" || typeof body.method !== "string" || body.method.length > 128 || (own(body, "id") && !(typeof body.id === "string" || (typeof body.id === "number" && Number.isSafeInteger(body.id))))) {
         return send(res, 400, rpcError(null, -32600, "Invalid request"));
@@ -190,12 +209,14 @@ export function createWindowsMcpServer({ port = 8765, host = "127.0.0.1", identi
         if (!record(body.params) || typeof body.params.name !== "string" || !record(body.params.arguments ?? {})) {
           return send(res, 400, rpcError(id, -32602, "Invalid tool parameters"));
         }
-        if (!toolRegistry.has(body.params.name)) return send(res, 400, rpcError(id, -32602, "Unknown or disabled tool"));
+        if (!toolRegistry.has(body.params.name)) { audit("tool_denied"); return send(res, 400, rpcError(id, -32602, "Unknown or disabled tool")); }
         try {
           const output = await toolRegistry.call(body.params.name, body.params.arguments ?? {});
+          audit("tool_executed");
           const result = { content: [{ type: "text", text: JSON.stringify(output) }], isError: false };
           return send(res, 200, rpcResult(id, modern ? metaResult(result) : result));
         } catch (error) {
+          audit("tool_failed");
           if (error?.code === "invalid_arguments") return send(res, 400, rpcError(id, -32602, "Invalid tool arguments"));
           // Never send child-process stderr, file contents or stack traces.
           const result = { content: [{ type: "text", text: "Tool execution unavailable or denied" }], isError: true };
