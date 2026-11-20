@@ -94,7 +94,10 @@ begin
   for Index := 1 to ParamCount do
     if Uppercase(ParamStr(Index)) = '/OFFLINE' then Mode := '-Offline';
   Entrypoint := ExpandConstant('{tmp}\KTKPayload\Run-KTKAcceptance.ps1');
-  if (Mode = '-Live') and FileExists(ExpandConstant('{autopf}\KTK\QwenMCP\MANIFEST.json')) then begin
+  { A staged but not yet paired first install must resume acceptance, not update. }
+  if (Mode = '-Live') and
+     FileExists(ExpandConstant('{autopf}\KTK\QwenMCP\MANIFEST.json')) and
+     FileExists(ExpandConstant('{commonappdata}\KTK\QwenMCP\state\enrollment.json')) then begin
     Entrypoint := ExpandConstant('{tmp}\KTKPayload\Maintain-KTKMCP.ps1');
     Args := '-NoProfile -ExecutionPolicy Bypass -File "' + Entrypoint +
       '" -Action Update -PackagePath "' + ExpandConstant('{tmp}\KTKPayload') +
