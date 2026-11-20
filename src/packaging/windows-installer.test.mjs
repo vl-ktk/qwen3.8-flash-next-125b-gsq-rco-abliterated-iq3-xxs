@@ -26,6 +26,8 @@ test("step16 Windows service templates run as LocalService and cannot auto-start
 test("step16 installer is first-install-only and transactional with fail-closed activation", async () => {
   const installer = await load("../../scripts/Install-KTKMCP.ps1");
   assert.match(installer, /\[switch\]\$CheckOnly/);
+  assert.match(installer, /\[switch\]\$Enroll/);
+  assert.match(installer, /Activate-KTKMCP\.ps1/);
   assert.match(installer, /Verify-KTKPackage\.ps1/);
   assert.match(installer, /WindowsIdentity/);
   assert.match(installer, /Start-Process.+-Verb RunAs/);
@@ -43,6 +45,13 @@ test("step16 installer is first-install-only and transactional with fail-closed 
   assert.match(installer, /\$dataCreated -and/);
   assert.doesNotMatch(installer, /(?:Start-Service\s+-Name|&\s*sc\.exe\s+start\b|--token\s+[a-z])/i);
   assert.doesNotMatch(installer, /(?:QWEN_MCP_GATEWAY_KEY|TUNNEL_TOKEN)\s*=/);
+});
+
+test("step16 single-action Windows launcher requests enrollment without embedding secrets", async () => {
+  const launcher = await load("../../scripts/Start-KTKMCP.cmd");
+  assert.match(launcher, /Install-KTKMCP\.ps1" -Enroll/);
+  assert.match(launcher, /-ExecutionPolicy Bypass/);
+  assert.doesNotMatch(launcher, /TUNNEL_TOKEN|GATEWAY_KEY|--token\s+ey/);
 });
 
 test("step16 device identity is written exclusively to protected destination", async () => {
