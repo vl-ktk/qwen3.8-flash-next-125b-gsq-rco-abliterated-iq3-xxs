@@ -67,3 +67,18 @@ jobs:
             [xml]$xml = Get-Content -LiteralPath $file -Raw
             if ($xml.service.startmode -ne 'Manual' -or $xml.service.serviceaccount.user -ne 'LocalService') { throw 'Unsafe service configuration' }
           }
+  windows-preflight:
+    needs: windows-payload
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: KTK-Windows-MCP-step16-${{ github.run_number }}
+          path: candidate
+      - name: Offline non-elevated preflight on Windows (no installation)
+        shell: powershell
+        run: |
+          Expand-Archive -LiteralPath 'candidate/KTK-Windows-MCP-0.16.0-win-x64.zip' -DestinationPath 'candidate/extracted'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Install-KTKMCP.ps1' -CheckOnly
+          if ($LASTEXITCODE -ne 0) { throw 'Windows preflight failed' }
