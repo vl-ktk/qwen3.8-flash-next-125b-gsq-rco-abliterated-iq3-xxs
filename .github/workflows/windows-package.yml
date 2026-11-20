@@ -167,10 +167,20 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'LocalSystem updater bootstrap failed' }
             $service = Get-CimInstance Win32_Service -Filter "Name='KTKQwenUpdater'"
             if (-not $service -or $service.StartName -ne 'LocalSystem' -or $service.State -ne 'Running') { throw 'Updater service not running as SYSTEM' }
-            $script = 'import {readFile} from "node:fs/promises"; const {callLocalUpdater} = await import("./candidate/extracted/runtime/remote-update.mjs"); const key = (await readFile(process.env.TEST_GATEWAY, "utf8")).trim(); const result = await callLocalUpdater("status", null, {keyText:key}); if(result.status!=="idle") process.exit(1);'
+            $script = @'
+          import { readFile } from 'node:fs/promises';
+          import { pathToFileURL } from 'node:url';
+          const { callLocalUpdater } = await import(pathToFileURL(process.env.TEST_UPDATER_MODULE).href);
+          const key = (await readFile(process.env.TEST_GATEWAY, 'utf8')).trim();
+          const result = await callLocalUpdater('status', null, { keyText: key });
+          if (result.status !== 'idle') process.exit(1);
+          '@
+            $smoke = Join-Path $env:RUNNER_TEMP 'ktk-updater-smoke.mjs'
+            [IO.File]::WriteAllText($smoke, $script)
             $env:TEST_GATEWAY = $gateway
+            $env:TEST_UPDATER_MODULE = (Resolve-Path 'candidate/extracted/runtime/remote-update.mjs').Path
             for ($i=0; $i -lt 10; $i++) {
-              & 'candidate/extracted/bin/node.exe' --input-type=module -e $script
+              & 'candidate/extracted/bin/node.exe' $smoke
               if ($LASTEXITCODE -eq 0) { break }
               Start-Sleep -Seconds 1
             }
@@ -178,10 +188,11 @@ jobs:
           } finally {
             if (Get-Service KTKQwenUpdater -ErrorAction SilentlyContinue) {
               Stop-Service KTKQwenUpdater -ErrorAction SilentlyContinue
+              try { (Get-Service KTKQwenUpdater).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(20)) } catch { }
               & (Join-Path $root 'KTKQwenUpdater.exe') uninstall | Out-Null
             }
             foreach ($target in @($root,$data,(Join-Path $env:ProgramData 'KTK\QwenMCP'))) {
-              if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+              if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue }
             }
           }
   windows-setup-exe:
