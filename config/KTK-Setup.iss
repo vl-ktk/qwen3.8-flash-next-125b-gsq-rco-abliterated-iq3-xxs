@@ -11,7 +11,7 @@
 [Setup]
 AppId={{F087E1C8-6597-4DE8-960B-38D903A6E3BE}
 AppName=KTK Qwen MCP (Acceptance Candidate)
-AppVersion=0.18.3
+AppVersion=0.18.4
 AppPublisher=KTK
 DefaultDirName={autopf}\KTK\QwenMCP
 CreateAppDir=no
@@ -25,7 +25,7 @@ DisableProgramGroupPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=no
 OutputDir={#OutputRoot}
-OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.3-TEST-UNSIGNED
+OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.4-TEST-UNSIGNED
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
@@ -85,6 +85,7 @@ var
   Args: String;
   Mode: String;
   Index: Integer;
+  Entrypoint: String;
 begin
   if CurStep <> ssPostInstall then Exit;
   { Inno Setup 6 is a 32-bit installer: Sysnative resolves to native System32. }
@@ -92,12 +93,22 @@ begin
   Mode := '-Live';
   for Index := 1 to ParamCount do
     if Uppercase(ParamStr(Index)) = '/OFFLINE' then Mode := '-Offline';
-  Args := '-NoProfile -ExecutionPolicy Bypass -File "' +
-    ExpandConstant('{tmp}\KTKPayload\Run-KTKAcceptance.ps1') + '" ' + Mode;
+  Entrypoint := ExpandConstant('{tmp}\KTKPayload\Run-KTKAcceptance.ps1');
+  { A staged but not yet paired first install must resume acceptance, not update. }
+  if (Mode = '-Live') and
+     FileExists(ExpandConstant('{autopf}\KTK\QwenMCP\MANIFEST.json')) and
+     FileExists(ExpandConstant('{commonappdata}\KTK\QwenMCP\state\enrollment.json')) then begin
+    Entrypoint := ExpandConstant('{tmp}\KTKPayload\Maintain-KTKMCP.ps1');
+    Args := '-NoProfile -ExecutionPolicy Bypass -File "' + Entrypoint +
+      '" -Action Update -PackagePath "' + ExpandConstant('{tmp}\KTKPayload') +
+      '" -Resume -InstallerApproved';
+    WizardForm.StatusLabel.Caption := 'Обновление существующей KTK Qwen MCP без повторной привязки...';
+  end else
+    Args := '-NoProfile -ExecutionPolicy Bypass -File "' + Entrypoint + '" ' + Mode;
   ApprovalOpened := False;
   { Sysnative avoids WOW64 redirection without newer Inno 7 helper APIs. }
   if not ExecAndLogOutput(PowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode, @KTKLog) then
     RaiseException('Could not run KTK acceptance; see Windows error ' + IntToStr(ExitCode));
   if ExitCode <> 0 then
-    RaiseException('KTK acceptance failed; open KTK-MCP-Test report on Desktop.');
+    RaiseException('KTK setup/update failed; original installation may require recovery.');
 end;

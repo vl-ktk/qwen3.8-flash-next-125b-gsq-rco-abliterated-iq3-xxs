@@ -11,7 +11,7 @@ foreach ($folder in @($Root, $Data, (Join-Path $Data 'secrets'), (Join-Path $Dat
 $manifest = Join-Path $Root 'MANIFEST.json'
 if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw 'staged_manifest_missing' }
 $version = (Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json).package_version
-if ($version -notin @('0.18.2','0.18.3')) { throw 'staged_version_not_resumable' }
+if ($version -notin @('0.18.2','0.18.3','0.18.4')) { throw 'staged_version_not_resumable' }
 # Verify using THIS verified installer script; never execute the installed
 # verification script before checking it for tampering.
 $checksums = Join-Path $Root 'SHA256SUMS.txt'

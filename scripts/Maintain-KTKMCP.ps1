@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory=$true)][ValidateSet('Update','Repair','Rollback','Uninstall')][string]$Action,
     [string]$PackagePath,
     [switch]$Resume,
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$InstallerApproved
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -131,6 +132,7 @@ if ($Action -in @('Update','Repair')) {
     Assert-FileTree $PackagePath $manifest
 } elseif ($PackagePath) { throw 'package_not_used_by_action' }
 if ($Resume -and $Action -eq 'Uninstall') { throw 'uninstall_cannot_resume' }
+if ($InstallerApproved -and ($Action -ne 'Update' -or -not $Resume -or $CheckOnly)) { throw 'installer_approval_requires_live_update' }
 if ($CheckOnly) {
     if ($Action -notin @('Update','Repair') -or $Resume) { throw 'check_only_requires_package_and_no_resume' }
     Write-Output 'KTK maintenance candidate OK: offline package manifest and SHA256; no Windows services touched.'
@@ -142,6 +144,7 @@ if (-not (Test-Administrator)) {
     $args = '-NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -Action ' + $Action
     if ($PackagePath) { $args += ' -PackagePath "' + $PackagePath + '"' }
     if ($Resume) { $args += ' -Resume' }
+    if ($InstallerApproved) { $args += ' -InstallerApproved' }
     $child = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args -Wait -PassThru
     if ($null -eq $child -or $child.ExitCode -ne 0) { throw 'maintenance_elevation_declined_or_failed' }
     return
@@ -178,8 +181,10 @@ if ($Resume) {
 
 # Noninteractive execution is forbidden, even for unattended elevation.
 if (-not [Environment]::UserInteractive) { throw 'interactive_session_required' }
-$confirmation = Read-Host ("Type {0} to confirm KTK maintenance" -f $Action.ToUpperInvariant())
-if ($confirmation -cne $Action.ToUpperInvariant()) { throw 'confirmation_declined' }
+if (-not $InstallerApproved) {
+    $confirmation = Read-Host ("Type {0} to confirm KTK maintenance" -f $Action.ToUpperInvariant())
+    if ($confirmation -cne $Action.ToUpperInvariant()) { throw 'confirmation_declined' }
+}
 if ($Action -eq 'Uninstall') {
     if ((Read-Host 'Type ERASE-KTK-DATA to permanently remove local identity and credentials') -cne 'ERASE-KTK-DATA') { throw 'erase_confirmation_declined' }
     Assert-NoLinks $root
@@ -264,5 +269,12 @@ try {
         if ($Action -ne 'Rollback' -and (Test-Path -LiteralPath $previous) -and -not (Test-Path -LiteralPath $root)) { [IO.Directory]::Move($previous, $root) }
     }
     if ($stageCreated -and (Test-Path -LiteralPath $stage)) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    # Restore the original working version on a failed one-click upgrade.
+    # If live health cannot be restored, preserve the emergency lock and fail
+    # closed; never pretend a network outage or failed self-test was success.
+    if ($Action -eq 'Update' -and $Resume -and (Test-Path -LiteralPath $root) -and (Test-Enrollment)) {
+        try { Assert-RunningHealthy $root; Write-Output 'Original KTK version restored and healthy after failed update.' }
+        catch { Write-Output 'Original files restored, but recovery remains locked; further intervention required.' }
+    }
     throw $failure
 }
