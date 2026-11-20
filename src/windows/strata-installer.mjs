@@ -85,6 +85,17 @@ const safeCall = async (invoke, executable, args, env, cwd, timeout) => {
   } catch { fail("strata_command_failed"); }
 };
 
+export function verifyStrataEngineInventory(stdout, config = lock) {
+  let result;
+  try { result = JSON.parse(stdout); } catch { fail("strata_engine_unverified"); }
+  if (result?.schema_version !== 1 || result.ok !== true || !Array.isArray(result.families)) fail("strata_engine_unverified");
+  const active = result.families.filter(family => family?.family === "qwen" || family?.family === "flash_next")
+    .flatMap(family => Array.isArray(family.engines) ? family.engines : [])
+    .find(engine => engine?.active === true && engine?.fits === true && engine?.version === config.control_version && engine?.backend === "cuda" && ["cuda12", "cuda13"].includes(engine?.variant));
+  if (!active) fail("strata_engine_unverified");
+  return { version: active.version, backend: active.backend, variant: active.variant, inference_tested: false };
+}
+
 export async function installStrata({ ownerApproved = false, platform = process.platform, arch = process.arch,
   root = null, localAppData = process.env.LOCALAPPDATA, config = lock,
   fetchImpl = fetch, getScript = fetchPinnedStrataScript, invoke = execFileAsync, availableBytes = null, now = () => new Date() } = {}) {
@@ -137,14 +148,16 @@ export async function installStrata({ ownerApproved = false, platform = process.
     await safeCall(invoke, ps, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath], env, installRoot, 900000);
     if (!(await regular(py)) || !(await regular(entry))) fail("strata_terminal_incomplete");
     const pythonEnv = { ...env, STRATA_HOME: path.join(installRoot, "home") };
-    await safeCall(invoke, py, [entry, "--version"], pythonEnv, bin, 30000);
+    const version = await safeCall(invoke, py, [entry, "--version"], pythonEnv, bin, 30000);
+    if (typeof version?.stdout !== "string" || !/\b0\.2\.17\b/.test(version.stdout)) fail("strata_version_mismatch");
     // The upstream updater verifies its signed feed and each engine manifest.
     // No model weights are acquired; engine selection follows the GPU/driver.
     await safeCall(invoke, py, [entry, "update", "--no-control", "--feed", config.feed, "--output", "json"], pythonEnv, bin, 1800000);
-    await safeCall(invoke, py, [entry, "components", "engines", "--output", "json"], pythonEnv, bin, 30000);
+    const engineResult = await safeCall(invoke, py, [entry, "components", "engines", "--output", "json"], pythonEnv, bin, 30000);
+    const engine = verifyStrataEngineInventory(engineResult.stdout, config);
     await writeFile(stateFile, JSON.stringify({ schema: 1, status: "ready", version: config.app_version, control: config.control_version,
-      feed: config.feed, script_sha256: config.script.sha256, at: now().toISOString() }) + "\n", { mode: 0o600 });
-    return { status: "installed", version: config.app_version, control_version: config.control_version, engine: "signed_updater_completed_inference_unverified", location: installRoot };
+      engine, feed: config.feed, script_sha256: config.script.sha256, at: now().toISOString() }) + "\n", { mode: 0o600 });
+    return { status: "installed", version: config.app_version, control_version: config.control_version, engine, location: installRoot };
   } catch (error) {
     // Remove only this attempt's new KTK tree; never touch an existing Strata
     // installation, any user's models, services, registry or Windows PATH.
