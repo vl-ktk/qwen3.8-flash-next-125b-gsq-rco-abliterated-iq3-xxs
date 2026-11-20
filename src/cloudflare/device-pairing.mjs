@@ -18,10 +18,10 @@ const validId = value => typeof value === "string" && /^[A-Za-z0-9_-]{32}$/.test
 const validPublic = value => typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
 const validCode = value => typeof value === "string" && /^[A-HJ-NP-Z2-9]{10}$/.test(value);
 const escaped = value => String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const html = body => new Response(`<!doctype html><html lang="ru"><meta charset="utf-8"><title>Qwen — привязка устройства</title>${body}</html>`, {
+const html = (body, nonce) => new Response(`<!doctype html><html lang="ru"><meta charset="utf-8"><title>Qwen — привязка устройства</title>${body}</html>`, {
   // Chrome requires same-origin referrer policy for a non-null Origin on form
   // navigation, exactly as the OAuth consent flow does (v6 regression).
-  headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "same-origin", "x-frame-options": "DENY", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" },
+  headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "same-origin", "x-frame-options": "DENY", "x-content-type-options": "nosniff", "content-security-policy": `default-src 'none'; ${nonce ? `script-src 'nonce-${nonce}'; ` : ""}form-action 'self'; frame-ancestors 'none'; base-uri 'none'` },
 });
 
 async function parseJson(request) {
@@ -96,6 +96,7 @@ export async function devicePairRoute(request, env, storage) {
   }
   if (path === "/device/pair/manage" && request.method === "GET") {
     const proof = base64url(random(32));
+    const nonce = base64url(random(24));
     await storage.transaction(async tx => new OAuthStorage(tx).put(`device:csrf:${await hash(proof)}`, "1", { expirationTtl: TTL }));
     return html(`<h1>Qwen: разрешить устройство</h1><p>Проверьте код и отпечаток ключа на самом Windows-компьютере.</p><form method="post" action="/device/pair/manage">
 <input type="hidden" name="proof" value="${proof}"><label>Код (10 символов) <input name="code" required maxlength="10"></label>
@@ -103,7 +104,17 @@ export async function devicePairRoute(request, env, storage) {
 <label>Пароль владельца <input type="password" name="password" required maxlength="1024" autocomplete="current-password"></label>
 <button name="action" value="approve">Разрешить</button>
 <p>Для отзыва введите идентификатор устройства вместо кода и отпечатка:</p>
-<label>Device ID <input name="device_id" maxlength="32"></label><button name="action" value="revoke" formnovalidate>Отозвать доступ</button></form>`);
+<label>Device ID <input name="device_id" maxlength="32"></label><button name="action" value="revoke" formnovalidate>Отозвать доступ</button></form>
+<script nonce="${nonce}">"use strict";
+// Only accept exact short-lived pairing metadata from the URL fragment.
+// The fragment never reaches the Worker; clear it before entering a password.
+const match = /^#code=([A-HJ-NP-Z2-9]{10})&fingerprint=([A-F0-9]{16})$/.exec(location.hash);
+if (match) {
+  document.querySelector('input[name="code"]').value = match[1];
+  document.querySelector('input[name="fingerprint"]').value = match[2];
+  history.replaceState(null, "", location.pathname);
+}
+</script>`, nonce);
   }
   if (path === "/device/pair/manage" && request.method === "POST") {
     if (request.headers.get("origin") !== ISSUER || request.headers.get("sec-fetch-site") !== "same-origin") return json(403, { error: "invalid_origin" });

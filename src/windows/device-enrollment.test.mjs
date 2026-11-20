@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { generateDeviceIdentity } from "./device-identity.mjs";
 import { createDeviceBootstrapSession, openBootstrapEnvelope } from "./device-bootstrap.mjs";
-import { requestDeviceBootstrap, waitForDeviceBootstrap, saveDeviceBootstrap } from "./device-enrollment.mjs";
+import { deviceApprovalUrl, requestDeviceBootstrap, waitForDeviceBootstrap, saveDeviceBootstrap } from "./device-enrollment.mjs";
 import { sealBootstrapEnvelope } from "../cloudflare/device-bootstrap.mjs";
 
 const randomId = () => randomBytes(24).toString("base64url");
@@ -26,6 +26,10 @@ test("bootstrap client sends public keys only, and decrypts approved bound envel
     return Response.json({ state: "approved", device_id: deviceId, bootstrap: envelope });
   };
   const started = await requestDeviceBootstrap(identity, { fetcher });
+  assert.equal(deviceApprovalUrl(started), `https://qwen125b-mcp.vl-ktk.workers.dev/device/pair/manage#code=${code}&fingerprint=${identity.fingerprint}`);
+  assert.equal(new URL(deviceApprovalUrl(started)).search, "");
+  await assert.rejects(async () => deviceApprovalUrl({ ...started, verification_uri: "https://evil.test/device/pair/manage" }), /bootstrap_invalid_approval_url/);
+  await assert.rejects(async () => deviceApprovalUrl({ ...started, user_code: "A&password=1" }), /bootstrap_invalid_approval_url/);
   assert.equal(seen[0].body.public_key, identity.public_key);
   assert.match(seen[0].body.bootstrap_public_key, /^[A-Za-z0-9_-]{87}$/);
   assert.equal(seen[0].redirect, "error");

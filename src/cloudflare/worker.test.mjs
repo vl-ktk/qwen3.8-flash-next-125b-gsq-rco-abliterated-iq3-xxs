@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomBytes, createHash, createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readFile, mkdir, mkdtemp } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
 import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";
 import { buildSync } from "esbuild";
 import { generateDeviceIdentity, signDeviceAttestation } from "../windows/device-identity.mjs";
@@ -744,7 +745,23 @@ test("pairing management blocks forged origins, CSRF replay and incorrect owner 
   const f = await fixture(t, { paired: false });
   const browser = await f.send("/device/pair/manage");
   assert.equal(browser.headers.get("referrer-policy"), "same-origin");
-  assert.equal(browser.headers.get("content-security-policy"), "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  const page = await browser.text();
+  const csp = browser.headers.get("content-security-policy");
+  const nonce = page.match(/<script nonce="([A-Za-z0-9_-]{32})">/);
+  assert.ok(nonce);
+  assert.equal(csp, `default-src 'none'; script-src 'nonce-${nonce[1]}'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`);
+  const script = page.match(/<script nonce="[A-Za-z0-9_-]{32}">([\s\S]+?)<\/script>/)?.[1];
+  assert.ok(script);
+  for (const fragment of ["#code=ABCDEFGHJK&fingerprint=0123456789ABCDEF", "#code=bad&fingerprint=0123456789ABCDEF"]) {
+    const input = { code: { value: "" }, fingerprint: { value: "" } };
+    let replaced = false;
+    runInNewContext(script, { location: { hash: fragment, pathname: "/device/pair/manage" },
+      history: { replaceState: (_, __, path) => { assert.equal(path, "/device/pair/manage"); replaced = true; } },
+      document: { querySelector: selector => input[selector.match(/name="([^"]+)"/)[1]] } });
+    assert.equal(input.code.value, fragment.startsWith("#code=ABCDEFGHJK") ? "ABCDEFGHJK" : "");
+    assert.equal(input.fingerprint.value, fragment.startsWith("#code=ABCDEFGHJK") ? "0123456789ABCDEF" : "");
+    assert.equal(replaced, fragment.startsWith("#code=ABCDEFGHJK"));
+  }
   const started = await (await pairStart(f, f.identity)).json();
   const approve = { action: "approve", code: started.user_code, fingerprint: started.fingerprint };
   assert.equal((await deviceForm(f, approve, { origin: "https://evil.test" })).status, 403);

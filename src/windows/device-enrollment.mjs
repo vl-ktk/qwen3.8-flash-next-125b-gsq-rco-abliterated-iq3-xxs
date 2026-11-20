@@ -45,6 +45,17 @@ export async function requestDeviceBootstrap(identity, { fetcher = fetch, label 
   return { session, request_id: reply.request_id, user_code: reply.user_code, fingerprint: reply.fingerprint, verification_uri: reply.verification_uri, expires_in: reply.expires_in };
 }
 
+// The short-lived public pairing code belongs in the URL *fragment*, which
+// browsers do not send to the server or include in HTTP access logs. The
+// installer opens this URL as the original (non-elevated) desktop user.
+export function deviceApprovalUrl(started) {
+  if (started?.verification_uri !== ISSUER + "/device/pair/manage"
+    || !CODE.test(started.user_code ?? "") || !FINGERPRINT.test(started.fingerprint ?? "")) {
+    throw Error("bootstrap_invalid_approval_url");
+  }
+  return `${started.verification_uri}#code=${started.user_code}&fingerprint=${started.fingerprint}`;
+}
+
 export async function waitForDeviceBootstrap(started, { fetcher = fetch, delay = ms => new Promise(resolve => setTimeout(resolve, ms)), maxPolls = 115 } = {}) {
   const count = Math.min(maxPolls, Math.max(0, Math.floor((started.expires_in - 10) / 5)));
   for (let attempt = 0; attempt < count; attempt++) {
@@ -102,6 +113,9 @@ export async function enrollDeviceFromDisk({ identityPath, secretsDir, stateDir,
   print(`APPROVAL URL: ${started.verification_uri}`);
   print(`ONE-TIME CODE: ${started.user_code}`);
   print(`DEVICE FINGERPRINT: ${started.fingerprint}`);
+  // Machine-readable signal consumed by the one-file Inno Setup UI. Never
+  // contains credentials, the private device identity or a bootstrap token.
+  print(`KTK_APPROVAL_URL: ${deviceApprovalUrl(started)}`);
   const payload = await waitForDeviceBootstrap(started, { fetcher, ...(delay ? { delay } : {}) });
   await saveDeviceBootstrap({ secretsDir, stateDir }, payload);
   print("DEVICE PROVISIONED. Credentials stored locally under protected ACL.");
