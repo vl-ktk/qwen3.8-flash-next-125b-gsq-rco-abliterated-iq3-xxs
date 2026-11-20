@@ -48,8 +48,8 @@ try {
     & icacls.exe $data '/T' '/C' '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'updater_data_acl_failed' }
     [IO.Directory]::Move($stage, $root)
-    & (Join-Path $root 'KTKQwenUpdater.exe') install | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'updater_service_install_failed' }
+    & (Join-Path $root 'KTKQwenUpdater.exe') install
+    if ($LASTEXITCODE -ne 0) { throw ('updater_service_install_failed_exit_{0}' -f $LASTEXITCODE) }
     $installed = $true
     Start-Service -Name 'KTKQwenUpdater' -ErrorAction Stop
     $activated = $true
