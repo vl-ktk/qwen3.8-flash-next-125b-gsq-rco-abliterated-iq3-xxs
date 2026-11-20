@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "package_version": "0.15.0",
+  "platform": "win32",
+  "architecture": "x64",
+  "artifacts": [
+    {
+      "id": "node",
+      "version": "24.22.3",
+      "file": "node.exe",
+      "archive_path": "bin/node.exe",
+      "url": "https://nodejs.org/dist/v24.22.3/win-x64/node.exe",
+      "sha256": "86fc4785327db5f5c7558dc6156c543b433c313e813a222e088086222ab4afa6"
+    },
+    {
+      "id": "cloudflared",
+      "version": "2026.11.1",
+      "file": "cloudflared.exe",
+      "archive_path": "bin/cloudflared.exe",
+      "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.11.1/cloudflared-windows-amd64.exe",
+      "sha256": "341deda3db5ec498a0482254d6c38c0b7cf01a30c37bb5dd95d2216d08955e35"
+    }
+  ],
+  "licenses": [
+    { "file": "node-LICENSE", "archive_path": "licenses/node-LICENSE", "url": "https://raw.githubusercontent.com/nodejs/node/v24.22.3/LICENSE" },
+    { "file": "cloudflared-LICENSE", "archive_path": "licenses/cloudflared-LICENSE", "url": "https://raw.githubusercontent.com/cloudflare/cloudflared/2026.11.1/LICENSE" }
+  ]
+}

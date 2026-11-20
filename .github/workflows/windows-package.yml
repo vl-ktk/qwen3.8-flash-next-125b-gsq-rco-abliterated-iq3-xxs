@@ -1,0 +1,49 @@
+name: Windows payload checks
+
+on:
+  pull_request:
+    paths:
+      - "config/windows-package.lock.json"
+      - "config/windows-mcp.defaults.json"
+      - "src/windows/**"
+      - "src/packaging/**"
+      - "scripts/**"
+      - ".github/workflows/windows-package.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-payload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Packaging unit tests (offline)
+        run: node --test src/packaging/*.test.mjs
+      - name: Fetch vendor binaries and verify pinned SHA-256
+        run: node scripts/fetch-windows-vendors.mjs .generated/windows-vendors
+      - name: Assemble verified source payload
+        run: node scripts/build-windows-package.mjs .generated/windows-vendors .generated/packages/KTK-Windows-MCP-0.15.0-win-x64.zip "$SOURCE_COMMIT"
+      - name: Validate archive and outer SHA-256
+        run: |
+          cd .generated/packages
+          sha256sum --check KTK-Windows-MCP-0.15.0-win-x64.zip.sha256
+          unzip -t KTK-Windows-MCP-0.15.0-win-x64.zip
+          unzip -p KTK-Windows-MCP-0.15.0-win-x64.zip MANIFEST.json | node -e 'let x="";process.stdin.on("data",c=>x+=c);process.stdin.on("end",()=>{const m=JSON.parse(x);if(m.ready_for_installation!==false||m.source_commit!==process.env.SOURCE_COMMIT||m.files.length<15)process.exit(1)})'
+      - name: Save Windows candidate payload (not an installer)
+        uses: actions/upload-artifact@v4
+        with:
+          name: KTK-Windows-MCP-step15-${{ github.run_number }}
+          path: |
+            .generated/packages/KTK-Windows-MCP-0.15.0-win-x64.zip
+            .generated/packages/KTK-Windows-MCP-0.15.0-win-x64.zip.sha256
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error

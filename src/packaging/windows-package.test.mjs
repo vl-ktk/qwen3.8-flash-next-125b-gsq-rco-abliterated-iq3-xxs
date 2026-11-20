@@ -1,0 +1,111 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { buildWindowsPackage, sha256File, validatePackageLock } from "./windows-package.mjs";
+import { fetchWindowsVendors } from "./vendor-fetch.mjs";
+
+const run = promisify(execFile);
+const fakeHash = content => createHash("sha256").update(content).digest("hex");
+const readZip = async (archive, name) => (await run("unzip", ["-p", archive, name], { encoding: "buffer", maxBuffer: 5 * 1024 * 1024 })).stdout;
+
+async function fixture(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ktk-packaging-test-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sourceRoot = path.join(root, "repo"), vendorDir = path.join(root, "vendor");
+  await mkdir(path.join(sourceRoot, "src/windows"), { recursive: true });
+  await mkdir(path.join(sourceRoot, "scripts"), { recursive: true });
+  await mkdir(path.join(sourceRoot, "config"), { recursive: true });
+  for (const name of ["admin-cli", "administration", "device-identity", "emergency-lock", "main", "mcp-server", "monitoring", "origin-auth", "windows-tools"]) {
+    await writeFile(path.join(sourceRoot, `src/windows/${name}.mjs`), `export const ${name.replace(/-/g, "_")} = true;\n`);
+  }
+  await writeFile(path.join(sourceRoot, "scripts/Verify-KTKPackage.ps1"), "# check sha256\n");
+  await writeFile(path.join(sourceRoot, "config/windows-mcp.defaults.json"), '{"bind":"127.0.0.1"}\n');
+  await writeFile(path.join(sourceRoot, "src/windows/private-key.pem"), "DO_NOT_BUNDLE_SECRET");
+  await writeFile(path.join(sourceRoot, ".env"), "DO_NOT_BUNDLE_SECRET");
+  await mkdir(vendorDir);
+  const node = Buffer.alloc(1024 * 1024 + 20, 5), cloudflared = Buffer.alloc(1024 * 1024 + 30, 7);
+  const lock = { schema: 1, package_version: "0.15.0", platform: "win32", architecture: "x64", artifacts: [
+    { id: "node", version: "24.22.3", file: "node.exe", archive_path: "bin/node.exe", url: "https://nodejs.org/dist/v24.22.3/win-x64/node.exe", sha256: fakeHash(node) },
+    { id: "cloudflared", version: "2026.11.1", file: "cloudflared.exe", archive_path: "bin/cloudflared.exe", url: "https://github.com/cloudflare/cloudflared/releases/download/2026.11.1/cloudflared-windows-amd64.exe", sha256: fakeHash(cloudflared) },
+  ], licenses: [
+    { file: "node-LICENSE", archive_path: "licenses/node-LICENSE", url: "https://raw.githubusercontent.com/nodejs/node/v24.22.3/LICENSE" },
+    { file: "cloudflared-LICENSE", archive_path: "licenses/cloudflared-LICENSE", url: "https://raw.githubusercontent.com/cloudflare/cloudflared/2026.11.1/LICENSE" },
+  ] };
+  await writeFile(path.join(vendorDir, "node.exe"), node);
+  await writeFile(path.join(vendorDir, "cloudflared.exe"), cloudflared);
+  await writeFile(path.join(vendorDir, "node-LICENSE"), "Node test license for packaging verification\n");
+  await writeFile(path.join(vendorDir, "cloudflared-LICENSE"), "Cloudflare test license for packaging verification\n");
+  return { root, sourceRoot, vendorDir, lock, packageLock: lock, node, cloudflared, sourceSha: "a".repeat(40), outFile: path.join(root, "out", "KTK-Windows-MCP-0.15.0.zip") };
+}
+
+test("step 15 payload is reproducible, manifest-verified, without secrets or install actions", async t => {
+  const f = await fixture(t);
+  const result = await buildWindowsPackage(f);
+  assert.equal(result.fileCount, 18);
+  assert.equal(result.manifest.ready_for_installation, false);
+  assert.equal(result.manifest.source_commit, f.sourceSha);
+  assert.equal(result.manifest.target, "windows-x64");
+  assert.equal(result.manifest.executables[0].sha256, fakeHash(f.node));
+  assert.equal(result.manifest.executables[1].sha256, fakeHash(f.cloudflared));
+  assert.equal(result.sha256, await sha256File(f.outFile));
+  assert.equal((await readFile(f.outFile + ".sha256", "utf8")).trim(), `${result.sha256}  ${path.basename(f.outFile)}`);
+  const zipFiles = (await run("unzip", ["-Z1", f.outFile])).stdout.trim().split("\n");
+  assert.equal(zipFiles.length, 18);
+  assert.equal(zipFiles.includes("runtime/main.mjs"), true);
+  assert.equal(zipFiles.includes("Verify-KTKPackage.ps1"), true);
+  assert.equal(zipFiles.includes("bin/cloudflared.exe"), true);
+  assert.equal(zipFiles.includes("bin/node.exe"), true);
+  assert.equal(zipFiles.some(name => /\.env|test\.mjs|key\.pem|private|\.git|token/i.test(name)), false);
+  assert.doesNotMatch((await readZip(f.outFile, "README.txt")).toString("utf8"), /DO_NOT_BUNDLE_SECRET/);
+  const manifest = JSON.parse(await readZip(f.outFile, "MANIFEST.json"));
+  assert.equal(manifest.files.length, 16);
+  for (const record of manifest.files) assert.equal(fakeHash(await readZip(f.outFile, record.path)), record.sha256);
+  await assert.rejects(() => buildWindowsPackage(f), /package_output_exists/);
+  const other = { ...f, outFile: path.join(f.root, "out", "second.zip") };
+  const duplicate = await buildWindowsPackage(other);
+  assert.equal(duplicate.sha256, result.sha256);
+});
+
+test("package rejects unsigned vendor modification, missing binary and symlinks", async t => {
+  const f = await fixture(t);
+  await writeFile(path.join(f.vendorDir, "cloudflared.exe"), "tampered");
+  await assert.rejects(() => buildWindowsPackage(f), /vendor_checksum_mismatch|invalid_package_size/);
+  await rm(path.join(f.vendorDir, "cloudflared.exe"));
+  await assert.rejects(() => buildWindowsPackage(f), /package_input_missing/);
+  await symlink(path.join(f.vendorDir, "node.exe"), path.join(f.vendorDir, "cloudflared.exe"));
+  await assert.rejects(() => buildWindowsPackage(f), /package_input_not_regular/);
+  await assert.rejects(() => buildWindowsPackage({ ...f, sourceSha: "invalid" }), /invalid_source_sha/);
+});
+
+test("lock validates official host and canonical target; a bad hash is denied", async t => {
+  const f = await fixture(t);
+  assert.equal(validatePackageLock(f.lock).artifacts.length, 2);
+  assert.throws(() => validatePackageLock({ ...f.lock, artifacts: [f.lock.artifacts[0]] }), /invalid_package_lock/);
+  assert.throws(() => validatePackageLock({ ...f.lock, artifacts: [{ ...f.lock.artifacts[0], url: "https://evil.example/node.exe" }, f.lock.artifacts[1]] }), /invalid_package_lock/);
+  assert.throws(() => validatePackageLock({ ...f.lock, artifacts: [{ ...f.lock.artifacts[0], archive_path: "../../evil" }, f.lock.artifacts[1]] }), /invalid_package_lock/);
+  assert.throws(() => validatePackageLock({ ...f.lock, artifacts: [{ ...f.lock.artifacts[0], sha256: "abc" }, f.lock.artifacts[1]] }), /invalid_package_lock/);
+});
+
+test("vendor download validates hashes before activating files, offline mock", async t => {
+  const f = await fixture(t);
+  const destination = path.join(f.root, "downloaded");
+  const values = { "node.exe": f.node, "cloudflared.exe": f.cloudflared, "node-LICENSE": Buffer.from("Node test license for packaging verification\n"), "cloudflared-LICENSE": Buffer.from("Cloudflare test license for packaging verification\n") };
+  let downloaded = 0;
+  const fetcher = async url => {
+    downloaded++;
+    const file = [...f.lock.artifacts, ...f.lock.licenses].find(x => x.url === url)?.file;
+    return new Response(values[file], { status: 200 });
+  };
+  await fetchWindowsVendors({ lock: f.lock, destination, fetcher });
+  assert.equal(downloaded, 4);
+  await fetchWindowsVendors({ lock: f.lock, destination, fetcher });
+  assert.equal(downloaded, 4);
+  assert.equal(await sha256File(path.join(destination, "node.exe")), fakeHash(f.node));
+  const tampered = path.join(f.root, "bad-download");
+  await assert.rejects(() => fetchWindowsVendors({ lock: f.lock, destination: tampered, fetcher: async () => new Response(Buffer.alloc(1024 * 1024 + 3, 1)) }), /vendor_checksum_mismatch/);
+});
