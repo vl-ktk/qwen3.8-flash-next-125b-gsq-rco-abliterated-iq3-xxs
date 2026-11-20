@@ -80,8 +80,15 @@ jobs:
         shell: powershell
         run: |
           # Must fail at the SYSTEM identity gate; never reach installation.
-          $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'scripts/Run-KTKRemoteUpdate.ps1' -ArtifactPath 'C:\never-used\artifact.zip' -Version '0.18.15' 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 1) { throw 'SYSTEM preflight did not reject unprivileged updater' }
+          $oldErrorAction = $ErrorActionPreference
+          try {
+            # GitHub's PowerShell wrapper uses Stop; captured native stderr is
+            # expected data here, not a terminating test-runner exception.
+            $ErrorActionPreference = 'Continue'
+            $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'scripts/Run-KTKRemoteUpdate.ps1' -ArtifactPath 'C:\never-used\artifact.zip' -Version '0.18.15' 2>&1 | Out-String
+            $status = $LASTEXITCODE
+          } finally { $ErrorActionPreference = $oldErrorAction }
+          if ($status -ne 1) { throw 'SYSTEM preflight did not reject unprivileged updater' }
           if ($output -notmatch 'KTK_UPDATE_FAILURE:preflight:updater_requires_localsystem') { throw 'Missing safe failure code' }
           if ($output -notmatch 'KTK_UPDATE_CONTEXT:remote:[0-9]{1,4}:[a-z]{3,40}') { throw 'Missing safe script and exception context' }
   windows-preflight:
