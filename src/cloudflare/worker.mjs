@@ -4,15 +4,35 @@ import { ISSUER, RESOURCE, SCOPES, json, secure, challenge, readBody, oauthReque
 import { DEVICE_PATHS, devicePairRoute, attestDevice } from "./device-pairing.mjs";
 import { signedOriginHeaders } from "./origin-auth.mjs";
 
-// Read-only Windows tools. Mutations, service control, OS reboots and all
-// unknown names remain default-deny at the Cloudflare gateway.
+// Explicitly scoped KTK update is the ONLY mutation; arbitrary commands,
+// service actions, operating system reboots and unknown tools are denied.
 export const TOOL_SCOPES = Object.freeze({
   system_info: "qwen:read", system_monitor: "qwen:read", process_list: "qwen:read",
   service_status: "qwen:read", app_status: "qwen:read", file_read: "qwen:files:read",
   admin_status: "qwen:read",
   pc_preflight: "qwen:read", storage_check: "qwen:read",
   runtime_check: "qwen:read", installation_plan: "qwen:read",
+  update_status: "qwen:read", update_apply: "qwen:update",
 });
+const VERSION = /^0\.18\.[1-9]\d{0,3}$/;
+const DIGEST = /^[a-f0-9]{64}$/;
+// Catalog is populated by a separately verified CI release operation. The
+// assistant cannot pick a URL or hash in a tool call. No catalog = no updates.
+export function approvedRelease(env, version) {
+  if (typeof version !== "string" || !VERSION.test(version)) return null;
+  if (typeof env?.QWEN_UPDATE_RELEASES_JSON !== "string" || env.QWEN_UPDATE_RELEASES_JSON.length > 16384) return null;
+  let catalog;
+  try { catalog = JSON.parse(env.QWEN_UPDATE_RELEASES_JSON); } catch { return null; }
+  if (!catalog || Array.isArray(catalog) || typeof catalog !== "object") return null;
+  const entry = Object.hasOwn(catalog, version) ? catalog[version] : null;
+  if (!entry || Array.isArray(entry) || Object.keys(entry).sort().join() !== "sha256,url") return null;
+  if (typeof entry.sha256 !== "string" || !DIGEST.test(entry.sha256) || typeof entry.url !== "string" || entry.url.length > 2048) return null;
+  let url;
+  try { url = new URL(entry.url); } catch { return null; }
+  if (url.protocol !== "https:" || url.username || url.password || url.hash || url.port ||
+      !(["github.com", "api.github.com"].includes(url.hostname) || url.hostname.endsWith(".blob.core.windows.net") || url.hostname.endsWith(".oaiusercontent.com"))) return null;
+  return { version, url: url.toString(), sha256: entry.sha256 };
+}
 const PROTOCOL_PATHS = new Set(["/authorize", "/oauth/token", "/oauth/register", "/.well-known/oauth-authorization-server"]);
 const RESOURCE_PATHS = new Set(["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]);
 
@@ -147,6 +167,14 @@ export class QwenOAuthState extends DurableObject {
         if (!message.params || Array.isArray(message.params) || typeof message.params.name !== "string") return json(400, { error: "invalid_request" });
         const scope = Object.hasOwn(TOOL_SCOPES, message.params?.name) ? TOOL_SCOPES[message.params.name] : null;
         if (!scope || !auth.scope.includes(scope)) return challenge("insufficient_scope", 403);
+        if (message.params.name === "update_apply") {
+          const args = message.params.arguments;
+          if (!args || Array.isArray(args) || typeof args !== "object" || Object.keys(args).join() !== "version") return json(400, { error: "invalid_update_request" });
+          const approved = approvedRelease(this.env, args.version);
+          if (!approved) return json(409, { error: "release_not_approved" });
+          message.params.arguments = approved;
+          body = JSON.stringify(message);
+        }
       } else if (!["initialize", "server/discover", "notifications/initialized", "notifications/cancelled", "ping", "tools/list"].includes(message.method)) return json(403, { error: "method_not_allowed" });
     }
     const deviceFailure = await attestDevice(this.env.QWEN_MCP_ORIGIN, this.ctx.storage, this.env.QWEN_MCP_GATEWAY_KEY);

@@ -6,6 +6,7 @@ import path from "node:path";
 import { collectWindowsMonitoring, queryNvidiaGpus } from "./monitoring.mjs";
 import { getAdminStatus, WINDOWS_MCP_VERSION } from "./administration.mjs";
 import { normalizePcPreflight, normalizeStorageCheck, normalizeRuntimeCheck, buildInstallationPlan } from "./model-preflight.mjs";
+import { callLocalUpdater, validateUpdateOffer } from "./remote-update.mjs";
 
 const execFileAsync = promisify(execFile);
 const MAX_READ = 32 * 1024;
@@ -138,7 +139,7 @@ $running = @(Get-Process -Name 'strata','strata-server' -ErrorAction SilentlyCon
 function validate(name, args) {
   if (!isRecord(args)) throw safeError("invalid_arguments");
   const keys = Object.keys(args);
-  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan"].includes(name)) {
+  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "update_status"].includes(name)) {
     if (keys.length) throw safeError("invalid_arguments");
     return {};
   }
@@ -156,6 +157,7 @@ function validate(name, args) {
     if (keys.length !== 1 || keys[0] !== "path" || typeof args.path !== "string" || args.path.length < 1 || args.path.length > 1024 || args.path.includes("\0")) throw safeError("invalid_arguments");
     return { path: args.path };
   }
+  if (name === "update_apply") return validateUpdateOffer(args);
   throw safeError("unknown_tool");
 }
 
@@ -243,6 +245,16 @@ const DEFINITIONS = Object.freeze({
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
+  update_status: {
+    name: "update_status", description: "Read the KTK-only privileged updater's last update result. No changes.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  update_apply: {
+    name: "update_apply", description: "Apply one KTK MCP release from the authenticated gateway release catalog; the server substitutes exact trusted URL and SHA-256. May restart KTK services. Never accepts commands or arbitrary destinations.",
+    inputSchema: { type: "object", properties: { version: { type: "string", pattern: "^0\\.18\\.[1-9][0-9]{0,3}$" } }, required: ["version"], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
 });
 
 async function readAllowedFile(filePath, roots) {
@@ -266,9 +278,10 @@ async function readAllowedFile(filePath, roots) {
   } finally { await fd.close(); }
 }
 
-export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery, readNvidia = queryNvidiaGpus, identityConfigured = false } = {}) {
+export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery, readNvidia = queryNvidiaGpus, identityConfigured = false,
+  updater = callLocalUpdater, updaterKey = null } = {}) {
   if (!Array.isArray(allowedFileRoots) || allowedFileRoots.some(root => typeof root !== "string" || !path.isAbsolute(root))) throw safeError("invalid_file_roots");
-  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", ...(allowedFileRoots.length ? ["file_read"] : [])];
+  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", ...(updaterKey ? ["update_status", "update_apply"] : []), ...(allowedFileRoots.length ? ["file_read"] : [])];
   const safeGpu = async () => {
     try { return await readNvidia(); } catch { return { status: "unavailable", reason: "gpu_inventory_failed", gpus: [] }; }
   };
@@ -284,6 +297,10 @@ export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQue
     async call(name, args) {
       if (!available.includes(name)) throw safeError("unknown_tool");
       const params = validate(name, args);
+      if (name === "update_status" || name === "update_apply") {
+        if (!updaterKey) throw safeError("updater_not_configured");
+        return updater(name === "update_apply" ? "update" : "status", params, { keyText: updaterKey });
+      }
       if (name === "admin_status") return getAdminStatus({
         paired: identityConfigured,
         health: { status: "ready", version: WINDOWS_MCP_VERSION },

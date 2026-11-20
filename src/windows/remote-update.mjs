@@ -1,0 +1,165 @@
+import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createServer } from "node:http";
+import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import path from "node:path";
+import { createOriginVerifier, decodeGatewayKey } from "./origin-auth.mjs";
+
+const exec = promisify(execFile);
+const VERSION = /^0\.18\.[1-9]\d{0,3}$/;
+const DIGEST = /^[a-f0-9]{64}$/;
+const MAX_BUNDLE = 160 * 1024 * 1024;
+const MAX_REQUEST = 4096;
+const MAX_URL_LENGTH = 2048;
+const fail = code => { throw Object.assign(new Error(code), { code }); };
+
+// Never accept a command, executable path, target directory, or arbitrary host
+// from an MCP caller. The Worker substitutes this envelope from its own
+// protected release catalog, after OAuth scope and device-attestation checks.
+export function validateUpdateOffer(offer) {
+  if (!offer || typeof offer !== "object" || Array.isArray(offer) ||
+      Object.keys(offer).sort().join() !== "sha256,url,version" ||
+      typeof offer.version !== "string" || !VERSION.test(offer.version) ||
+      typeof offer.sha256 !== "string" || !DIGEST.test(offer.sha256) ||
+      typeof offer.url !== "string" || offer.url.length > MAX_URL_LENGTH) fail("invalid_update_offer");
+  let url;
+  try { url = new URL(offer.url); } catch { fail("invalid_update_offer"); }
+  if (url.protocol !== "https:" || url.username || url.password || url.hash || url.port ||
+      !["github.com", "api.github.com"].includes(url.hostname) &&
+      !url.hostname.endsWith(".blob.core.windows.net") &&
+      !url.hostname.endsWith(".oaiusercontent.com")) fail("update_source_denied");
+  return { version: offer.version, sha256: offer.sha256, url: url.toString() };
+}
+
+export function signUpdateRequest(keyText, method, route, body = "", now = Date.now()) {
+  const key = decodeGatewayKey(keyText);
+  const timestamp = String(Math.floor(now / 1000));
+  const nonce = randomBytes(16).toString("base64url");
+  const headers = { accept: "application/json", "content-type": "application/json" };
+  const binding = ["accept", "content-type", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-qwen-device-id", "x-qwen-device-nonce"]
+    .map(name => `${name}:${headers[name] ?? ""}`).join("\n");
+  const hash = createHash("sha256").update(body).digest("hex");
+  const payload = `QWEN-ORIGIN-V1\n${timestamp}\n${nonce}\n${method}\n${route}\n${hash}\n${binding}`;
+  return { ...headers, "x-qwen-origin-timestamp": timestamp, "x-qwen-origin-nonce": nonce,
+    "x-qwen-origin-signature": createHmac("sha256", key).update(payload).digest("base64url") };
+}
+
+export async function callLocalUpdater(action, offer, { keyText, fetcher = fetch, port = 18765 } = {}) {
+  if (action !== "update" && action !== "status") fail("unknown_update_action");
+  if (typeof keyText !== "string") fail("updater_not_configured");
+  const route = action === "update" ? "/v1/update" : "/v1/status";
+  const body = action === "update" ? JSON.stringify(validateUpdateOffer(offer)) : "";
+  const method = action === "update" ? "POST" : "GET";
+  const response = await fetcher(`http://127.0.0.1:${port}${route}`, {
+    method, redirect: "error", body: body || undefined,
+    headers: signUpdateRequest(keyText, method, route, body), signal: AbortSignal.timeout(4500),
+  }).catch(() => fail("updater_unavailable"));
+  if (!response.ok) fail("updater_unavailable");
+  return response.json().catch(() => fail("updater_unavailable"));
+}
+
+export async function downloadVerifiedRelease(offer, outputPath, { fetcher = fetch, maxBytes = MAX_BUNDLE } = {}) {
+  validateUpdateOffer(offer);
+  let url = offer.url;
+  let response;
+  for (let redirects = 0; redirects <= 3; redirects++) {
+    response = await fetcher(url, { redirect: "manual", signal: AbortSignal.timeout(180000) });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      if (redirects === 3) fail("update_too_many_redirects");
+      const next = new URL(response.headers.get("location") ?? "", url);
+      validateUpdateOffer({ ...offer, url: next.toString() });
+      await response.body?.cancel();
+      url = next.toString();
+      continue;
+    }
+    break;
+  }
+  if (!response?.ok || !response.body) fail("update_download_unavailable");
+  const size = Number(response.headers.get("content-length"));
+  if (size > maxBytes) fail("update_too_large");
+  const handle = await open(outputPath, "wx", 0o600);
+  const digest = createHash("sha256");
+  let written = 0;
+  try {
+    for await (const chunk of response.body) {
+      written += chunk.length;
+      if (written > maxBytes) fail("update_too_large");
+      digest.update(chunk);
+      await handle.writeFile(chunk);
+    }
+  } finally { await handle.close(); }
+  if (!written || digest.digest("hex") !== offer.sha256) fail("update_checksum_mismatch");
+  return written;
+}
+
+// Runs ONLY a packaged, fixed PowerShell maintenance entrypoint. Its SYSTEM
+// caller is verified again by the script; no shell, user-chosen arguments or
+// user-chosen executable path enter this boundary.
+export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, download = downloadVerifiedRelease, invoke = exec } = {}) {
+  validateUpdateOffer(offer);
+  const temp = await mkdtemp(path.join(dataRoot, "update-"));
+  const bundle = path.join(temp, "artifact.zip");
+  try {
+    await download(offer, bundle);
+    const native = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    await invoke(native, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+      path.join(updaterRoot, "Run-KTKRemoteUpdate.ps1"), "-ArtifactPath", bundle, "-Version", offer.version], {
+      shell: false, windowsHide: true, timeout: 300000, maxBuffer: 16384,
+      env: { SystemRoot: process.env.SystemRoot ?? "C:\\Windows", ProgramFiles: process.env.ProgramFiles ?? "C:\\Program Files", ProgramData: process.env.ProgramData ?? "C:\\ProgramData" },
+    });
+    return { status: "updated", version: offer.version };
+  } finally {
+    // Only this invocation's newly-created private staging folder is removed.
+    await rm(temp, { recursive: true, force: true });
+  }
+}
+
+export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1", apply = applyVerifiedRelease,
+  updaterRoot, dataRoot, statusFile = path.join(dataRoot, "status.json"), initialStatus = { status: "idle" } } = {}) {
+  if (host !== "127.0.0.1" || !Number.isInteger(port) || port < 0 || port > 65535) fail("invalid_updater_bind");
+  const verify = createOriginVerifier(keyText);
+  let state = initialStatus;
+  const report = async next => { state = { ...next, at: new Date().toISOString() }; await writeFile(statusFile, JSON.stringify(state), { mode: 0o600 }); };
+  const server = createServer(async (req, res) => {
+    const reply = (code, data) => { res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(data)); };
+    try {
+      if (req.headers.host !== `127.0.0.1:${server.address().port}` || req.headers.origin) return reply(403, { error: "forbidden" });
+      if (req.url !== "/v1/update" && req.url !== "/v1/status") return reply(404, { error: "not_found" });
+      const method = req.url === "/v1/update" ? "POST" : "GET";
+      if (req.method !== method) return reply(405, { error: "method_not_allowed" });
+      let size = 0;
+      const parts = [];
+      for await (const chunk of req) { size += chunk.length; if (size > MAX_REQUEST) return reply(413, { error: "too_large" }); parts.push(chunk); }
+      const raw = Buffer.concat(parts);
+      if (!verify(req.headers, method, req.url, raw)) return reply(403, { error: "denied" });
+      if (method === "GET") return reply(200, state);
+      if (state.status === "running") return reply(409, { error: "update_running" });
+      const offer = validateUpdateOffer(JSON.parse(raw.toString("utf8")));
+      // Response first: the updater might restart the caller MCP service.
+      await report({ status: "running", version: offer.version });
+      reply(202, { status: "accepted", version: offer.version });
+      Promise.resolve().then(() => apply(offer, { updaterRoot, dataRoot })).then(
+        () => report({ status: "updated", version: offer.version }),
+        error => report({ status: "failed", version: offer.version, code: typeof error?.code === "string" ? error.code : "update_failed" }),
+      ).catch(() => { state = { status: "failed", code: "status_unavailable" }; });
+    } catch { if (!res.writableEnded) reply(400, { error: "invalid_request" }); }
+  });
+  return server;
+}
+
+export async function runUpdaterService() {
+  if (process.platform !== "win32" || process.arch !== "x64") fail("windows_updater_only");
+  const updaterRoot = path.win32.join(process.env.ProgramFiles ?? "C:\\Program Files", "KTK", "Updater");
+  const dataRoot = path.win32.join(process.env.ProgramData ?? "C:\\ProgramData", "KTK", "Updater");
+  await mkdir(dataRoot, { recursive: true });
+  const keyText = (await readFile(path.win32.join(process.env.ProgramData ?? "C:\\ProgramData", "KTK", "QwenMCP", "secrets", "gateway.key"), "utf8")).trim();
+  let initialStatus;
+  try { initialStatus = JSON.parse(await readFile(path.win32.join(dataRoot, "status.json"), "utf8")); } catch { initialStatus = { status: "idle" }; }
+  if (!initialStatus || typeof initialStatus !== "object" || !["idle", "failed", "updated"].includes(initialStatus.status)) {
+    initialStatus = { status: "failed", code: "updater_interrupted" };
+  }
+  const server = createUpdaterServer({ keyText, updaterRoot, dataRoot, initialStatus });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(18765, "127.0.0.1", resolve); });
+  process.stdout.write("KTK update service ready on loopback\n");
+}

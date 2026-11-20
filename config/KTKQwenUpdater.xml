@@ -1,0 +1,12 @@
+<service>
+  <id>KTKQwenUpdater</id>
+  <name>KTK Qwen Updater</name>
+  <description>Localhost-only, KTK-release-only maintenance helper. No general remote shell.</description>
+  <executable>%BASE%\bin\node.exe</executable>
+  <arguments>"%BASE%\runtime\Run-KTKUpdater.mjs"</arguments>
+  <workingdirectory>%BASE%\runtime</workingdirectory>
+  <startmode>Manual</startmode>
+  <serviceaccount><domain>NT AUTHORITY</domain><user>LocalSystem</user></serviceaccount>
+  <logpath>%PROGRAMDATA%\KTK\Updater\logs</logpath>
+  <log mode="roll"/>
+</service>

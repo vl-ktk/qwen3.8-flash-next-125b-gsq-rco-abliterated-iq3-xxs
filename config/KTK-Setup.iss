@@ -11,7 +11,7 @@
 [Setup]
 AppId={{F087E1C8-6597-4DE8-960B-38D903A6E3BE}
 AppName=KTK Qwen MCP (Acceptance Candidate)
-AppVersion=0.18.5
+AppVersion=0.18.6
 AppPublisher=KTK
 DefaultDirName={autopf}\KTK\QwenMCP
 CreateAppDir=no
@@ -25,7 +25,7 @@ DisableProgramGroupPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=no
 OutputDir={#OutputRoot}
-OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.5-TEST-UNSIGNED
+OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.6-TEST-UNSIGNED
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
@@ -88,6 +88,7 @@ var
   Entrypoint: String;
   LocalAI: String;
   UserPowerShell: String;
+  Updater: String;
 begin
   if CurStep <> ssPostInstall then Exit;
   { Inno Setup 6 is a 32-bit installer: Sysnative resolves to native System32. }
@@ -108,6 +109,12 @@ begin
   if ExitCode <> 0 then
     RaiseException('KTK setup/update failed; original installation may require recovery.');
   if Mode = '-Live' then begin
+    Updater := ExpandConstant('{tmp}\KTKPayload\Install-KTKUpdater.ps1');
+    Args := '-NoProfile -ExecutionPolicy Bypass -File "' + Updater + '" -Live';
+    WizardForm.StatusLabel.Caption := 'Установка службы автоматических обновлений KTK...';
+    if not ExecAndLogOutput(PowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode, @KTKLog) then
+      RaiseException('Could not install KTK updater; Windows error ' + IntToStr(ExitCode));
+    if ExitCode <> 0 then RaiseException('KTK updater setup incomplete; retry this installer.');
     LocalAI := ExpandConstant('{tmp}\KTKPayload\Show-KTKLocalAI.ps1');
     UserPowerShell := ExpandConstant('{win}\System32\WindowsPowerShell\v1.0\powershell.exe');
     Args := '-NoProfile -ExecutionPolicy Bypass -File "' + LocalAI + '"';

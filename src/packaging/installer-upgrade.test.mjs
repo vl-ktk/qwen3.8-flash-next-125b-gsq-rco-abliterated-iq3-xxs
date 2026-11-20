@@ -21,8 +21,8 @@ test("integrated live installer updates enrolled MCP, then runs AI under origina
 
 test("one-click approval cannot enable unrelated maintenance operations", () => {
   assert.match(maintenance, /\$InstallerApproved -and \(\$Action -ne 'Update' -or -not \$Resume -or \$CheckOnly\)/);
-  assert.match(maintenance, /if \(-not \[Environment\]::UserInteractive\)/);
-  assert.match(maintenance, /if \(-not \$InstallerApproved\) \{[\s\S]*?Read-Host/);
+  assert.match(maintenance, /if \(-not \$UpdaterApproved -and -not \[Environment\]::UserInteractive\)/);
+  assert.match(maintenance, /if \(-not \$InstallerApproved -and -not \$UpdaterApproved\) \{[\s\S]*?Read-Host/);
   assert.match(maintenance, /previous_version_exists_rollback_first/);
   assert.match(maintenance, /Original KTK version restored and healthy after failed update/);
   assert.match(maintenance, /if \(Test-Path -LiteralPath \$lock\) \{ throw 'resume_refuses_existing_emergency_lock' \}/);
