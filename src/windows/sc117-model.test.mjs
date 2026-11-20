@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, truncate, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import lock from "./sc117-model.lock.json" with { type: "json" };
@@ -126,9 +126,12 @@ test("incomplete download stays on D: after free space drops below fresh-install
   const partial = sc117AssetLocation(rootD, lock.files[0]) + ".part";
   await mkdir(path.dirname(partial), { recursive: true });
   await writeFile(partial, "");
-  await truncate(partial, 30_000_000_000); // Sparse, no 30GB data allocation.
+  const measureFile = async file => {
+    const info = await stat(file).catch(() => null);
+    return file === partial && info ? { size: 30_000_000_000 } : info;
+  }; // Fixture simulates 30 GB of resumed data without allocating it on Windows.
   const picked = await selectSc117Target([{ drive: "D:", free_bytes: 80_000_000_000 }, { drive: "C:", free_bytes: 200_000_000_000 }], lock,
-    drive => drive === "D:" ? rootD : rootC);
+    drive => drive === "D:" ? rootD : rootC, measureFile);
   assert.equal(picked.root, rootD);
   assert.equal(picked.resuming, true);
   assert.ok(picked.remaining_bytes < 50_000_000_000);
