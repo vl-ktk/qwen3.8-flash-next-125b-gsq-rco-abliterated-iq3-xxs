@@ -1,6 +1,6 @@
 # Пункт 14 — разграничение привилегий и защита команд
 
-Дата: 20.11.2026. Исходник: `feature/step14-security-boundaries` поверх `main` (`eeda085abd7aecd838d08607497b2550a463bfba`). **Пока только source-код: production Cloudflare, Windows владельца/друга и Netcup не изменялись.**
+Дата: 20.11.2026. Исходник: `main`. **[PR #17](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/17) MERGED** (squash `df1cba2a91c7d11a1d2b20300eac8df01dd35bfc`) поверх предыдущей `main` (`eeda085abd7aecd838d08607497b2550a463bfba`). **Пока только source-код: production Cloudflare, Windows владельца/друга и Netcup не изменялись.**
 
 ## Найденная уязвимость и исправление
 
@@ -28,4 +28,4 @@
 - `npm run check` — PASS (включая новые модули).
 - `npm test` — **91/91 PASS**: OAuth, scope, Ed25519, настоящий loopback, HMAC, replay, неверные подписи, emergency lock, CLI.
 - `npm run build` — Wrangler **dry-run PASS**, никуда не публикует.
-- GitHub PR, CI и merge — указать после GitHub проверки. Никакой live Windows/Cloudflare проверки не утверждать.
+- [GitHub CI #44692712409](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44692712409) — **SUCCESS** (`npm ci`, check, test, build). Слияние #17 подтверждено сравнением: в `main` один новый squash-коммит, 19 изменённых файлов. Никакой live Windows/Cloudflare проверки не утверждать.
