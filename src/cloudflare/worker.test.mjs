@@ -26,7 +26,7 @@ const codeChallenge = createHash("sha256").update(verifier).digest("base64url");
 const gatewayKey = randomBytes(32).toString("base64url");
 const tunnelToken = randomBytes(64).toString("base64url");
 
-async function fixture(t, { configured = true, gatewayConfigured = true, tunnelConfigured = false, state = true, upstream, originBackend, ownerPassword = password, persistPath, paired = true, attestation = "valid", deviceIdentity, deviceIdOverride } = {}) {
+async function fixture(t, { configured = true, gatewayConfigured = true, tunnelConfigured = false, state = true, upstream, originBackend, ownerPassword = password, persistPath, paired = true, attestation = "valid", deviceIdentity, deviceIdOverride, releaseCatalog } = {}) {
   const calls = [];
   const identity = deviceIdentity ?? await generateDeviceIdentity();
   const deviceId = deviceIdOverride ?? randomBytes(24).toString("base64url");
@@ -37,7 +37,7 @@ async function fixture(t, { configured = true, gatewayConfigured = true, tunnelC
     compatibilityDate: "2026-11-17", compatibilityFlags: ["global_fetch_strictly_public"], log: new Log(LogLevel.ERROR),
     outboundService: () => { throw Error("External network forbidden in tests"); },
     durableObjects: state ? { QWEN_OAUTH_STATE: { className: "TestOAuthState", useSQLite: true } } : {},
-    bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: ownerPassword, QWEN_OAUTH_GENERATION: "1", ...(gatewayConfigured ? { QWEN_MCP_GATEWAY_KEY: gatewayKey } : {}), ...(tunnelConfigured ? { QWEN_TUNNEL_TOKEN: tunnelToken } : {}) } : {},
+    bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: ownerPassword, QWEN_OAUTH_GENERATION: "1", ...(gatewayConfigured ? { QWEN_MCP_GATEWAY_KEY: gatewayKey } : {}), ...(tunnelConfigured ? { QWEN_TUNNEL_TOKEN: tunnelToken } : {}), ...(releaseCatalog ? { QWEN_UPDATE_RELEASES_JSON: JSON.stringify(releaseCatalog) } : {}) } : {},
     serviceBindings: { QWEN_MCP_ORIGIN: async request => {
       if (originBackend) return originBackend(request);
       if (new URL(request.url).pathname === "/device/attest") {
@@ -72,10 +72,14 @@ async function fixture(t, { configured = true, gatewayConfigured = true, tunnelC
     const handle = /name="handle" value="([^"]+)"/.exec(html)?.[1];
     return { response, html, cookie, handle, params };
   };
-  const approve = async (started, extra = {}, headers = {}) => send("/authorize", {
-    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: target, cookie: started.cookie ?? "", ...headers },
-    body: new URLSearchParams({ handle: started.handle ?? "", decision: "approve", password, scope: "qwen:read", ...extra }).toString(),
-  });
+  const approve = async (started, extra = {}, headers = {}) => {
+    const form = new URLSearchParams({ handle: started.handle ?? "", decision: "approve", password, scope: "qwen:read", ...extra });
+    if (typeof extra.scope === "string" && extra.scope.includes(" ")) {
+      form.delete("scope");
+      for (const scope of extra.scope.split(" ")) form.append("scope", scope);
+    }
+    return send("/authorize", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: target, cookie: started.cookie ?? "", ...headers }, body: form.toString() });
+  };
   const code = async (client, extra = {}) => {
     const started = await begin(client, extra);
     assert.equal(started.response.status, 200, started.html);
@@ -91,7 +95,7 @@ async function fixture(t, { configured = true, gatewayConfigured = true, tunnelC
     body: new URLSearchParams({ grant_type: "authorization_code", client_id: client.client_id, code, code_verifier: verifier, redirect_uri: redirect, resource, ...extra }).toString(),
   });
   const login = async (extra = {}) => {
-    const client = await register();
+    const client = await register(extra.scope ? { scope: extra.scope } : {});
     const response = await token(client, await code(client, extra));
     assert.equal(response.status, 200, await response.clone().text());
     return { client, ...await response.json() };
@@ -161,6 +165,24 @@ test("positive code + PKCE flow forwards only to fixed VPC destination and strip
   const protectedHeaders = ["accept", "content-type", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-qwen-device-id", "x-qwen-device-nonce"];
   const binding = protectedHeaders.map(name => `${name}:${forwarded.headers[name] ?? ""}`).join("\n");
   assert.equal(createHmac("sha256", Buffer.from(gatewayKey, "base64url")).update(`QWEN-ORIGIN-V1\n${time}\n${nonce}\nPOST\n/mcp\n${digest}\n${binding}`).digest("base64url"), signature);
+});
+
+test("KTK update requires dedicated OAuth scope and gateway-owned release metadata", async t => {
+  const release = { url: "https://github.com/vl-ktk/repo/releases/download/test/artifact.zip", sha256: "a".repeat(64) };
+  const f = await fixture(t, { releaseCatalog: { "0.18.6": release } });
+  const read = await f.login();
+  const params = { name: "update_apply", arguments: { version: "0.18.6" } };
+  assert.equal((await f.mcp(read.access_token, "tools/call", params)).status, 403);
+  const owner = await f.login({ scope: "qwen:read qwen:update" });
+  const unsupported = await f.mcp(owner.access_token, "tools/call", { name: "update_apply", arguments: { version: "0.18.7" } });
+  assert.equal(unsupported.status, 409);
+  assert.equal((await f.mcp(owner.access_token, "tools/call", { name: "update_apply", arguments: { version: "0.18.6", url: "https://evil.example" } })).status, 400);
+  assert.equal(f.calls.length, 0);
+  const accepted = await f.mcp(owner.access_token, "tools/call", params);
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  assert.equal(f.calls.length, 1);
+  const forwarded = JSON.parse(f.calls[0].body);
+  assert.deepEqual(forwarded.params.arguments, { version: "0.18.6", ...release });
 });
 
 test("origin shared key is required before device attestation and MCP forwarding", async t => {

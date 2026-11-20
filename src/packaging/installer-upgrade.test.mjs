@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 const setup = readFileSync(new URL("../../config/KTK-Setup.iss", import.meta.url), "utf8");
 const maintenance = readFileSync(new URL("../../scripts/Maintain-KTKMCP.ps1", import.meta.url), "utf8");
 const integrated = readFileSync(new URL("../../scripts/Run-KTKIntegratedAcceptance.ps1", import.meta.url), "utf8");
+const staged = readFileSync(new URL("../../scripts/Assert-KTKStaged.ps1", import.meta.url), "utf8");
+const packageLock = JSON.parse(readFileSync(new URL("../../config/windows-package.lock.json", import.meta.url), "utf8"));
 
 test("integrated live installer updates enrolled MCP, then runs AI under original user", () => {
   assert.match(setup, /Mode = '-Live'[\s\S]*?Run-KTKIntegratedAcceptance\.ps1/);
@@ -21,9 +23,13 @@ test("integrated live installer updates enrolled MCP, then runs AI under origina
 
 test("one-click approval cannot enable unrelated maintenance operations", () => {
   assert.match(maintenance, /\$InstallerApproved -and \(\$Action -ne 'Update' -or -not \$Resume -or \$CheckOnly\)/);
-  assert.match(maintenance, /if \(-not \[Environment\]::UserInteractive\)/);
-  assert.match(maintenance, /if \(-not \$InstallerApproved\) \{[\s\S]*?Read-Host/);
+  assert.match(maintenance, /if \(-not \$UpdaterApproved -and -not \[Environment\]::UserInteractive\)/);
+  assert.match(maintenance, /if \(-not \$InstallerApproved -and -not \$UpdaterApproved\) \{[\s\S]*?Read-Host/);
   assert.match(maintenance, /previous_version_exists_rollback_first/);
   assert.match(maintenance, /Original KTK version restored and healthy after failed update/);
   assert.match(maintenance, /if \(Test-Path -LiteralPath \$lock\) \{ throw 'resume_refuses_existing_emergency_lock' \}/);
+});
+
+test("Windows recovery gate accepts the current packaged installer version", () => {
+  assert.ok(staged.includes(`'${packageLock.package_version}'`));
 });

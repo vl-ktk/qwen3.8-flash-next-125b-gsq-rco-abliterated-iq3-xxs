@@ -28,7 +28,7 @@ const server = await listenWindowsMcp({
   emergencyLocked: () => emergency.isLocked(),
   // Fixed event codes only. No tool names, arguments, credentials or file data.
   auditEvent: entry => process.stdout.write(JSON.stringify(entry) + "\n"),
-  toolRegistry: createWindowsToolRegistry({ allowedFileRoots, identityConfigured: Boolean(identity && deviceId) }),
+  toolRegistry: createWindowsToolRegistry({ allowedFileRoots, identityConfigured: Boolean(identity && deviceId), updaterKey: gatewayKey }),
 });
 
 process.stdout.write(`Qwen MCP loopback listening on 127.0.0.1:${server.address().port}\n`);

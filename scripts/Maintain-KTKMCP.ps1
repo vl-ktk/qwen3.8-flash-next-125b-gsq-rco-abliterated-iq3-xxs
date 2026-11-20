@@ -1,11 +1,13 @@
-# Owner-operated maintenance, step 17. Never invoked by a remote MCP tool.
+# Owner-operated maintenance. Restricted remote updates reach this script
+# only through the fixed, LocalSystem-owned KTK updater entrypoint.
 # Requires an independently verified candidate ZIP extracted to a directory.
 param(
     [Parameter(Mandatory=$true)][ValidateSet('Update','Repair','Rollback','Uninstall')][string]$Action,
     [string]$PackagePath,
     [switch]$Resume,
     [switch]$CheckOnly,
-    [switch]$InstallerApproved
+    [switch]$InstallerApproved,
+    [switch]$UpdaterApproved
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -133,6 +135,10 @@ if ($Action -in @('Update','Repair')) {
 } elseif ($PackagePath) { throw 'package_not_used_by_action' }
 if ($Resume -and $Action -eq 'Uninstall') { throw 'uninstall_cannot_resume' }
 if ($InstallerApproved -and ($Action -ne 'Update' -or -not $Resume -or $CheckOnly)) { throw 'installer_approval_requires_live_update' }
+if ($UpdaterApproved) {
+    if ($InstallerApproved -or $Action -ne 'Update' -or -not $Resume -or $CheckOnly -or
+        [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne 'S-1-5-18') { throw 'updater_approval_requires_localsystem_live_update' }
+}
 if ($CheckOnly) {
     if ($Action -notin @('Update','Repair') -or $Resume) { throw 'check_only_requires_package_and_no_resume' }
     Write-Output 'KTK maintenance candidate OK: offline package manifest and SHA256; no Windows services touched.'
@@ -140,6 +146,7 @@ if ($CheckOnly) {
 }
 
 if (-not (Test-Administrator)) {
+    if ($UpdaterApproved) { throw 'updater_must_already_be_elevated' }
     if ($PSCommandPath.Contains('"') -or $PackagePath.Contains('"')) { throw 'unsafe_script_or_package_path' }
     $args = '-NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -Action ' + $Action
     if ($PackagePath) { $args += ' -PackagePath "' + $PackagePath + '"' }
@@ -161,7 +168,7 @@ elseif ($Action -ne 'Rollback') { throw 'installation_root_missing' }
 Assert-OrdinaryDirectory $data
 Assert-OrdinaryDirectory (Join-Path $data 'state')
 Assert-OwnedServices $root
-if ($Action -in @('Update','Repair') -and (Test-Path -LiteralPath $previous)) { throw 'previous_version_exists_rollback_first' }
+if (-not $UpdaterApproved -and $Action -in @('Update','Repair') -and (Test-Path -LiteralPath $previous)) { throw 'previous_version_exists_rollback_first' }
 if ($Action -eq 'Rollback') { Assert-OrdinaryDirectory $previous }
 if ($Action -in @('Update','Repair')) {
     $oldManifest = Get-Content -LiteralPath (Join-Path $root 'MANIFEST.json') -Raw | ConvertFrom-Json
@@ -180,8 +187,8 @@ if ($Resume) {
 }
 
 # Noninteractive execution is forbidden, even for unattended elevation.
-if (-not [Environment]::UserInteractive) { throw 'interactive_session_required' }
-if (-not $InstallerApproved) {
+if (-not $UpdaterApproved -and -not [Environment]::UserInteractive) { throw 'interactive_session_required' }
+if (-not $InstallerApproved -and -not $UpdaterApproved) {
     $confirmation = Read-Host ("Type {0} to confirm KTK maintenance" -f $Action.ToUpperInvariant())
     if ($confirmation -cne $Action.ToUpperInvariant()) { throw 'confirmation_declined' }
 }
@@ -190,6 +197,17 @@ if ($Action -eq 'Uninstall') {
     Assert-NoLinks $root
     Assert-NoLinks $data
     if (Test-Path -LiteralPath $previous) { Assert-NoLinks $previous }
+}
+
+if ($UpdaterApproved -and (Test-Path -LiteralPath $previous)) {
+    # The current live version passed enrollment/SCM preconditions above.
+    # Retain exactly one rolling rollback: after validating the old backup,
+    # discard it immediately before the next verified update transaction.
+    Assert-OrdinaryDirectory $previous
+    Assert-NoLinks $previous
+    & (Join-Path $previous 'Verify-KTKPackage.ps1') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'previous_package_verification_failed' }
+    Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop
 }
 
 # Fail closed on interrupted maintenance, regardless of whether services stop.
