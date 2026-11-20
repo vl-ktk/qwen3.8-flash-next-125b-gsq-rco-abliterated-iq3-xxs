@@ -3,11 +3,12 @@ import { OAuthStorage } from "./storage.mjs";
 import { ISSUER, RESOURCE, SCOPES, json, secure, challenge, readBody, oauthRequest, verify, isConfigured } from "./oauth.mjs";
 import { DEVICE_PATHS, devicePairRoute, attestDevice } from "./device-pairing.mjs";
 
-// Contracts for future Windows tools, not implementations of step 11.
-// Mutations, PowerShell, lifecycle and all unknown names remain default-deny.
+// Read-only Windows tools. Mutations, service control, OS reboots and all
+// unknown names remain default-deny at the Cloudflare gateway.
 export const TOOL_SCOPES = Object.freeze({
   system_info: "qwen:read", system_monitor: "qwen:read", process_list: "qwen:read",
   service_status: "qwen:read", app_status: "qwen:read", file_read: "qwen:files:read",
+  admin_status: "qwen:read",
 });
 const PROTOCOL_PATHS = new Set(["/authorize", "/oauth/token", "/oauth/register", "/.well-known/oauth-authorization-server"]);
 const RESOURCE_PATHS = new Set(["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]);
