@@ -52,6 +52,8 @@ function Remove-OwnTestInstall {
 }
 
 try {
+    # All real installation actions must use native 64-bit PowerShell, not WOW64.
+    if (-not [Environment]::Is64BitProcess) { throw 'native_x64_powershell_required' }
     Assert-Admin
     Record 'UAC: administrator confirmed'
     if ((Test-Path -LiteralPath $root) -or (Test-Path -LiteralPath $data)) { throw 'existing_ktk_install_refusing_overwrite' }

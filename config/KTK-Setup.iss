@@ -11,20 +11,21 @@
 [Setup]
 AppId={{F087E1C8-6597-4DE8-960B-38D903A6E3BE}
 AppName=KTK Qwen MCP (Acceptance Candidate)
-AppVersion=0.18.1
+AppVersion=0.18.2
 AppPublisher=KTK
 DefaultDirName={autopf}\KTK\QwenMCP
 CreateAppDir=no
 Uninstallable=no
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.19045
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=no
 OutputDir={#OutputRoot}
-OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.1-TEST-UNSIGNED
+OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.2-TEST-UNSIGNED
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
@@ -93,7 +94,8 @@ begin
   Args := '-NoProfile -ExecutionPolicy Bypass -File "' +
     ExpandConstant('{tmp}\KTKPayload\Run-KTKAcceptance.ps1') + '" ' + Mode;
   ApprovalOpened := False;
-  if not ExecAndLogOutput(PowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode, @KTKLog) then
+  { Always start native 64-bit Windows PowerShell even if Inno Setup is 32-bit. }
+  if not ExecAndLogOutputWithNativeSysDir(PowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode, @KTKLog) then
     RaiseException('Could not run KTK acceptance; see Windows error ' + IntToStr(ExitCode));
   if ExitCode <> 0 then
     RaiseException('KTK acceptance failed; open KTK-MCP-Test report on Desktop.');

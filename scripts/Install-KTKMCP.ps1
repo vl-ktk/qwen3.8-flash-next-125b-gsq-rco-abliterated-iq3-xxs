@@ -30,7 +30,9 @@ function Assert-OrdinaryDirectory([string]$Target) {
 
 $source = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'windows_required' }
-if ([Environment]::Is64BitOperatingSystem -ne $true -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'windows_x64_required' }
+# PROCESSOR_ARCHITECTURE describes the current process, not necessarily the OS.
+# A 32-bit launcher on x64 Windows reports x86; only the OS bitness matters.
+if (-not [Environment]::Is64BitOperatingSystem) { throw 'windows_x64_required' }
 $build = [Environment]::OSVersion.Version.Build
 if ($build -lt 19045) { throw 'windows_10_22h2_or_11_required' }
 if (-not $env:ProgramFiles -or -not $env:ProgramData) { throw 'windows_paths_missing' }
