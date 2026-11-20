@@ -54,6 +54,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Strata installer contracts on native Windows (offline mocks)
+        run: node --test src/windows/strata-installer.test.mjs
       - name: Parse Windows PowerShell 5.1 and service XML (no execution)
         shell: powershell
         run: |
@@ -89,6 +94,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'WOW64 OS-bitness preflight regression' }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Maintain-KTKMCP.ps1' -Action Update -PackagePath 'candidate/extracted' -CheckOnly
           if ($LASTEXITCODE -ne 0) { throw 'Windows maintenance package preflight failed' }
+      - name: Bundled Strata offline planning tool resolves its runtime
+        shell: powershell
+        run: |
+          $plan = & 'candidate/extracted/bin/node.exe' 'candidate/extracted/Install-KTKStrata.mjs' --plan | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $plan.status -ne 'planned_no_changes' -or $plan.version -ne '0.2.17') { throw 'Bundled Strata plan failed' }
   windows-real-scm-offline:
     needs: windows-payload
     runs-on: windows-latest
