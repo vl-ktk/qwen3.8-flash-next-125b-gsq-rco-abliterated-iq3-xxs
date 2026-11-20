@@ -11,7 +11,7 @@
 [Setup]
 AppId={{F087E1C8-6597-4DE8-960B-38D903A6E3BE}
 AppName=KTK Qwen MCP (Acceptance Candidate)
-AppVersion=0.18.4
+AppVersion=0.18.5
 AppPublisher=KTK
 DefaultDirName={autopf}\KTK\QwenMCP
 CreateAppDir=no
@@ -25,7 +25,7 @@ DisableProgramGroupPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=no
 OutputDir={#OutputRoot}
-OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.4-TEST-UNSIGNED
+OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.5-TEST-UNSIGNED
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
@@ -86,6 +86,8 @@ var
   Mode: String;
   Index: Integer;
   Entrypoint: String;
+  LocalAI: String;
+  UserPowerShell: String;
 begin
   if CurStep <> ssPostInstall then Exit;
   { Inno Setup 6 is a 32-bit installer: Sysnative resolves to native System32. }
@@ -93,22 +95,27 @@ begin
   Mode := '-Live';
   for Index := 1 to ParamCount do
     if Uppercase(ParamStr(Index)) = '/OFFLINE' then Mode := '-Offline';
-  Entrypoint := ExpandConstant('{tmp}\KTKPayload\Run-KTKAcceptance.ps1');
-  { A staged but not yet paired first install must resume acceptance, not update. }
-  if (Mode = '-Live') and
-     FileExists(ExpandConstant('{autopf}\KTK\QwenMCP\MANIFEST.json')) and
-     FileExists(ExpandConstant('{commonappdata}\KTK\QwenMCP\state\enrollment.json')) then begin
-    Entrypoint := ExpandConstant('{tmp}\KTKPayload\Maintain-KTKMCP.ps1');
-    Args := '-NoProfile -ExecutionPolicy Bypass -File "' + Entrypoint +
-      '" -Action Update -PackagePath "' + ExpandConstant('{tmp}\KTKPayload') +
-      '" -Resume -InstallerApproved';
-    WizardForm.StatusLabel.Caption := 'Обновление существующей KTK Qwen MCP без повторной привязки...';
+  if Mode = '-Live' then begin
+    Entrypoint := ExpandConstant('{tmp}\KTKPayload\Run-KTKIntegratedAcceptance.ps1');
+    WizardForm.StatusLabel.Caption := 'Проверка или установка Windows MCP...';
   end else
-    Args := '-NoProfile -ExecutionPolicy Bypass -File "' + Entrypoint + '" ' + Mode;
+    Entrypoint := ExpandConstant('{tmp}\KTKPayload\Run-KTKAcceptance.ps1');
+  Args := '-NoProfile -ExecutionPolicy Bypass -File "' + Entrypoint + '" ' + Mode;
   ApprovalOpened := False;
   { Sysnative avoids WOW64 redirection without newer Inno 7 helper APIs. }
   if not ExecAndLogOutput(PowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode, @KTKLog) then
     RaiseException('Could not run KTK acceptance; see Windows error ' + IntToStr(ExitCode));
   if ExitCode <> 0 then
     RaiseException('KTK setup/update failed; original installation may require recovery.');
+  if Mode = '-Live' then begin
+    LocalAI := ExpandConstant('{tmp}\KTKPayload\Show-KTKLocalAI.ps1');
+    UserPowerShell := ExpandConstant('{win}\System32\WindowsPowerShell\v1.0\powershell.exe');
+    Args := '-NoProfile -ExecutionPolicy Bypass -File "' + LocalAI + '"';
+    WizardForm.StatusLabel.Caption := 'Установка Strata и Qwen 125B для текущего пользователя...';
+    { B/C/D may NEVER be run elevated as Administrator or as LocalService. }
+    if not ExecAsOriginalUser(UserPowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode) then
+      RaiseException('Could not start the local AI wizard as original user; run Setup normally, not via Run as administrator.');
+    if ExitCode <> 0 then
+      RaiseException('Local AI installation incomplete. Run this same Setup.exe again to retry; verified files are retained.');
+  end;
 end;

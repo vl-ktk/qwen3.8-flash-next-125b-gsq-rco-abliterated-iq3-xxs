@@ -57,6 +57,20 @@ test("streamed fresh download checks exact SHA256 and leaves only final file", a
   assert.equal((await downloadVerifiedSc117File({ destination: file, url: testUrl, asset: tiny(text), fetchImpl: async () => { throw Error("should not fetch again"); } })).status, "already_verified");
 });
 
+test("download reports bytes for GUI and safely resumes an already verified file", async t => {
+  const root = await fixture(t);
+  const destination = path.join(root, "asset.gguf");
+  const body = "display download progress";
+  const events = [];
+  await downloadVerifiedSc117File({ destination, url: testUrl, asset: tiny(body),
+    fetchImpl: async () => new Response(body, { status: 200 }), onProgress: received => events.push(received) });
+  assert.deepEqual(events, [0, Buffer.byteLength(body)]);
+  events.length = 0;
+  await downloadVerifiedSc117File({ destination, url: testUrl, asset: tiny(body),
+    fetchImpl: async () => { throw Error("no new network calls"); }, onProgress: received => events.push(received) });
+  assert.deepEqual(events, [Buffer.byteLength(body)]);
+});
+
 test("interrupted HTTP download resumes only with matching metadata and strict 206 range", async t => {
   const root = await fixture(t);
   const file = path.join(root, "shard.gguf");

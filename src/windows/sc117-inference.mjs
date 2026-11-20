@@ -147,7 +147,7 @@ function ownedIdentity(doc) {
 export async function testSc117Inference({ approved = false, platform = process.platform, arch = process.arch,
   localAppData = process.env.LOCALAPPDATA, modelRoot = null, strataRoot = null,
   memoryBytes = os.totalmem(), invoke = execFileAsync, fetchImpl = fetch,
-  getModelRoot = findSc117ReadyRoot } = {}) {
+  getModelRoot = findSc117ReadyRoot, onStage = null } = {}) {
   if (!approved) fail("sc117_inference_owner_approval_required");
   if (platform !== "win32" || arch !== "x64") fail("sc117_inference_windows_x64_required");
   const roots = { modelRoot: modelRoot ?? await getModelRoot(), strataRoot: strataRoot ?? strataInstallRoot(localAppData) };
@@ -169,6 +169,7 @@ export async function testSc117Inference({ approved = false, platform = process.
 
   let identity;
   try {
+    if (onStage) await onStage("starting");
     const started = await command(["runtime", "start", "--profile", PROFILE, "--wait", "900", "--shutdown-timeout", "30", "--output", "json"], 950000);
     identity = ownedIdentity(started);
   } catch {
@@ -179,6 +180,7 @@ export async function testSc117Inference({ approved = false, platform = process.
   let testError = null;
   let answer = null;
   try {
+    if (onStage) await onStage("verifying");
     const current = await command(["runtime", "status", "--profile", PROFILE, "--output", "json"]);
     const owner = ownedIdentity(current);
     if (owner.ownerId !== identity.ownerId || owner.instanceId !== identity.instanceId) fail("sc117_runtime_identity_changed");
@@ -204,11 +206,13 @@ export async function testSc117Inference({ approved = false, platform = process.
   // or newly replaced server. The engine is drained by Strata's own runtime.
   let stopped;
   try {
+    if (onStage) await onStage("stopping");
     stopped = await command(["runtime", "stop", "--profile", PROFILE,
       "--if-owner-id", identity.ownerId, "--if-instance-id", identity.instanceId, "--wait", "120", "--output", "json"], 150000);
     if (stopped.state !== "stopped") fail("sc117_runtime_stop_unconfirmed");
   } catch { fail("sc117_runtime_stop_unconfirmed_manual_attention_required"); }
   if (testError) throw testError;
+  if (onStage) await onStage("verified");
   return { status: "inference_verified_and_stopped", model: PROFILE, endpoint: `127.0.0.1:${PORT}`,
     health: "loaded", generation: "verified", response_received: Boolean(answer), inference_tested: true };
 }

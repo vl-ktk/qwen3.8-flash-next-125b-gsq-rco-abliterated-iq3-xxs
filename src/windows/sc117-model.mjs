@@ -96,13 +96,14 @@ function assertDownloadResponse(response) {
 // This downloader writes only the named .part file. Interruption preserves it;
 // restart requires an exact matching state marker and HTTP 206 Content-Range.
 // Hash mismatch removes only the bad temporary file, never a user-provided GGUF.
-export async function downloadVerifiedSc117File({ asset, destination, url, fetchImpl = fetch } = {}) {
+export async function downloadVerifiedSc117File({ asset, destination, url, fetchImpl = fetch, onProgress = null } = {}) {
   if (!asset || typeof asset.bytes !== "number" || !Number.isSafeInteger(asset.bytes) || asset.bytes <= 0 || !HEX64.test(asset.sha256 ?? "") || !path.isAbsolute(destination)) fail("sc117_invalid_download_contract");
   const requestUrl = new URL(url);
   if (requestUrl.protocol !== "https:" || requestUrl.hostname !== "huggingface.co" || !requestUrl.pathname.startsWith(`/${SOURCE}/resolve/${REVISION}/`)) fail("sc117_asset_untrusted");
   const ready = await ensureRegular(destination);
   if (ready) {
     if (ready.size !== asset.bytes || await hashSc117File(destination) !== asset.sha256) fail("sc117_existing_file_invalid");
+    if (onProgress) await onProgress(asset.bytes);
     return { status: "already_verified", bytes: asset.bytes };
   }
   const parent = path.dirname(destination);
@@ -127,6 +128,7 @@ export async function downloadVerifiedSc117File({ asset, destination, url, fetch
   }
   let offset = (await stat(partial)).size;
   if (offset > asset.bytes) fail("sc117_partial_oversize");
+  if (onProgress) await onProgress(offset);
   while (offset < asset.bytes) {
     let response;
     try {
@@ -150,6 +152,7 @@ export async function downloadVerifiedSc117File({ asset, destination, url, fetch
         received += chunk.byteLength;
         if (received > allowed) fail("sc117_range_invalid");
         await handle.writeFile(Buffer.from(chunk));
+        if (onProgress) await onProgress(offset + received);
       }
       await handle.sync();
     } catch (error) {
@@ -247,7 +250,8 @@ export async function verifySc117Packer(file, lock = modelLock) {
 
 export async function prepareSc117Model({ approved = false, platform = process.platform, arch = process.arch,
   localAppData = process.env.LOCALAPPDATA, getVolumes = fixedModelVolumes, root = null,
-  strataRoot = null, downloadFile = downloadVerifiedSc117File, verifyPacker = verifySc117Packer, invoke = execFileAsync, lock = modelLock } = {}) {
+  strataRoot = null, downloadFile = downloadVerifiedSc117File, verifyPacker = verifySc117Packer, invoke = execFileAsync, lock = modelLock,
+  onStage = null, onProgress = null } = {}) {
   validateSc117Lock(lock);
   if (!approved) fail("sc117_owner_approval_required");
   if (platform !== "win32" || arch !== "x64") fail("sc117_windows_x64_required");
@@ -272,6 +276,7 @@ export async function prepareSc117Model({ approved = false, platform = process.p
     if (state.schema !== 1 || state.revision !== lock.revision || state.quantization !== lock.quantization || !/^[0-9a-f]{32}$/.test(state.nonce ?? "") || !["downloading", "packaging", "ready"].includes(state.status)) fail("sc117_existing_install_unrecognized");
     if (state.status === "ready") {
       await checkPack(path.join(chosenRoot, "pack"));
+      if (onStage) await onStage("already_prepared");
       return { status: "already_prepared_not_rehashed", root: chosenRoot, revision: lock.revision };
     }
   } else {
@@ -282,12 +287,20 @@ export async function prepareSc117Model({ approved = false, platform = process.p
   }
   // Preserve verified finished files and partial downloads across network failures.
   // Re-verify every completed shard when resuming before invoking the packer.
-  for (const file of lock.files) await downloadFile({ asset: file, destination: sc117AssetLocation(chosenRoot, file, lock), url: sc117AssetUrl(file, lock) });
+  let completedBytes = 0;
+  for (const [index, file] of lock.files.entries()) {
+    if (onStage) await onStage("downloading", { file_index: index + 1, files_total: lock.files.length });
+    await downloadFile({ asset: file, destination: sc117AssetLocation(chosenRoot, file, lock), url: sc117AssetUrl(file, lock),
+      onProgress: onProgress ? async received => onProgress({ file_index: index + 1, files_total: lock.files.length,
+        bytes_done: completedBytes + received, bytes_total: expectedBytes }) : null });
+    completedBytes += file.bytes;
+  }
   const pack = path.join(chosenRoot, "pack");
   const stage = path.join(chosenRoot, "pack-incomplete");
   if (await ensureDirectory(pack)) {
     await checkPack(pack);
   } else {
+    if (onStage) await onStage("packing");
     const existing = await ensureDirectory(stage);
     if (existing) {
       const stageMarker = await stateRead(path.join(stage, PACK_STAGE_MARKER));
@@ -319,6 +332,7 @@ export async function prepareSc117Model({ approved = false, platform = process.p
   state.pack = "pack";
   state.verified_asset_count = lock.files.length;
   await saveState(stateFile, state);
+  if (onStage) await onStage("prepared");
   return { status: "prepared_for_inference_test", root: chosenRoot, source: lock.repository, revision: lock.revision,
     first_shard: sc117AssetLocation(chosenRoot, lock.files[0], lock), second_shard: sc117AssetLocation(chosenRoot, lock.files[1], lock), mtp: path.join(chosenRoot, "mtp", "rt"), pack, inference_tested: false };
 }

@@ -15,6 +15,7 @@ const SOURCE_FILES = Object.freeze([
   "src/windows/strata-installer.mjs", "src/windows/strata-runtime.lock.json",
   "src/windows/sc117-model.mjs", "src/windows/sc117-model.lock.json",
   "src/windows/sc117-inference.mjs",
+  "src/windows/local-ai-setup.mjs",
   "src/windows/monitoring.mjs", "src/windows/origin-auth.mjs",
   "src/windows/windows-tools.mjs",
 ]);
@@ -104,12 +105,15 @@ export async function buildWindowsPackage({ sourceRoot, vendorDir, outFile, sour
     await include(path.join(sourceRoot, "scripts/Install-KTKStrata.mjs"), "Install-KTKStrata.mjs");
     await include(path.join(sourceRoot, "scripts/Prepare-KTKSC117.mjs"), "Prepare-KTKSC117.mjs");
     await include(path.join(sourceRoot, "scripts/Test-KTKSC117.mjs"), "Test-KTKSC117.mjs");
+    await include(path.join(sourceRoot, "scripts/Install-KTKLocalAI.mjs"), "Install-KTKLocalAI.mjs");
+    await include(path.join(sourceRoot, "scripts/Show-KTKLocalAI.ps1"), "Show-KTKLocalAI.ps1");
+    await include(path.join(sourceRoot, "scripts/Run-KTKIntegratedAcceptance.ps1"), "Run-KTKIntegratedAcceptance.ps1");
     await include(path.join(sourceRoot, "scripts/Run-KTKAcceptance.ps1"), "Run-KTKAcceptance.ps1");
     await include(path.join(sourceRoot, "scripts/Assert-KTKStaged.ps1"), "Assert-KTKStaged.ps1");
     await include(path.join(sourceRoot, "scripts/Start-KTKMCP.cmd"), "Start-KTKMCP.cmd");
     await include(path.join(sourceRoot, "config/KTKQwenMCP.xml"), "services/KTKQwenMCP.xml");
     await include(path.join(sourceRoot, "config/KTKQwenTunnel.xml"), "services/KTKQwenTunnel.xml");
-    const notice = `KTK Windows MCP ${packageLock.package_version}\nSource: ${sourceSha}\nACCEPTANCE CANDIDATE - NOT YET READY FOR PRODUCTION.\nRun-KTKAcceptance.ps1 performs a one-entry installation or a guarded retry of an incomplete KTK enrollment; it records a desktop report and never overwrites an existing installation.\nInstall-KTKMCP.ps1 stages Windows services disabled, generates device identity, and validates ACLs.\nStart-KTKMCP.cmd is an experimental single-action launcher for staged install + owner-approved activation.\nActivate-KTKMCP.ps1 requires a Worker already supporting encrypted bootstrap and holding separately configured secrets.\nMaintain-KTKMCP.ps1 supports confirmed update, repair, rollback and remote-revoked uninstall; defaults to locked/stopped.\nInstall-KTKStrata.mjs, Prepare-KTKSC117.mjs and Test-KTKSC117.mjs are future locally approved per-user runtime/model stages; existing Setup does not call them.\nDo not deploy to a friend's PC until Windows acceptance (step 18) succeeds.\nNo credentials or model files are included.\n`;
+    const notice = `KTK Windows MCP ${packageLock.package_version}\nSource: ${sourceSha}\nINTEGRATED OWNER ACCEPTANCE CANDIDATE - NOT VERIFIED ON OWNER GPU OR READY FOR FRIEND PC.\nSetup.exe live mode installs/updates the privileged Windows MCP, then launches original-user Local AI GUI: Strata v0.2.17, verified SC117 IQ3_XXS+MTP download and native pack, loopback-only inference acceptance.\nThe integrated installer may download over 77 GB and take hours. Offline mode NEVER downloads model weights or starts CUDA.\nRun-KTKIntegratedAcceptance.ps1 skips an already healthy matching MCP version so the same EXE can retry interrupted per-user AI work.\nShow-KTKLocalAI.ps1 shows coarse progress and file bytes; no manual PowerShell commands are needed.\nInstall-KTKMCP.ps1 stages Windows services disabled, generates device identity, and validates ACLs.\nMaintain-KTKMCP.ps1 supports confirmed update, repair, rollback and remote-revoked uninstall; defaults to locked/stopped.\nActivate-KTKMCP.ps1 requires a Worker already supporting encrypted bootstrap and holding separately configured secrets.\nFirst device pairing still needs owner approval in a browser. No signed production release, credentials or model files are included.\nDo not deploy to a friend's PC until owner Windows GPU acceptance succeeds.\n`;
     await writeFile(path.join(stage, "README.txt"), notice, "utf8");
     await utimes(path.join(stage, "README.txt"), STABLE_TIME, STABLE_TIME);
     fileRecords.push({ path: "README.txt", sha256: createHash("sha256").update(notice).digest("hex"), bytes: Buffer.byteLength(notice) });
