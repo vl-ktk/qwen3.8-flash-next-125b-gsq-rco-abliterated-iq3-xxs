@@ -32,8 +32,27 @@ test("one-click approval cannot enable unrelated maintenance operations", () => 
   assert.match(maintenance, /if \(Test-Path -LiteralPath \$lock\) \{ throw 'resume_refuses_existing_emergency_lock' \}/);
 });
 
+test("owner-run live upgrade rotates a preexisting verified rollback only after staging the replacement", () => {
+  assert.match(maintenance, /\$approvedRollingUpdate = \$Action -eq 'Update' -and \$Resume -and \(\$InstallerApproved -or \$UpdaterApproved\)/);
+  assert.match(maintenance, /if \(-not \$approvedRollingUpdate -and \$Action -in @\('Update','Repair'\) -and \(Test-Path -LiteralPath \$previous\)\) \{ throw 'previous_version_exists_rollback_first' \}/);
+  assert.match(maintenance, /\$rotatePrevious = \$approvedRollingUpdate -and \(Test-Path -LiteralPath \$previous\)/);
+  const verifies = maintenance.indexOf("if ($rotatePrevious) {");
+  const checksBackup = maintenance.indexOf("Assert-NoLinks $previous", verifies);
+  const verifiesBackup = maintenance.indexOf("& (Join-Path $previous 'Verify-KTKPackage.ps1')", verifies);
+  const stopsServices = maintenance.indexOf("Set-ManualStopped\nif ($Action -eq 'Uninstall')");
+  const stagesReplacement = maintenance.indexOf("Set-CodeAcl $stage", stopsServices);
+  const rotates = maintenance.indexOf("Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop", stagesReplacement);
+  const preservesCurrent = maintenance.indexOf("[IO.Directory]::Move($root, $previous)", rotates);
+  assert.ok(verifies !== -1 && verifies < checksBackup && checksBackup < verifiesBackup);
+  assert.ok(verifiesBackup < stopsServices && stopsServices < stagesReplacement);
+  assert.ok(stagesReplacement < rotates && rotates < preservesCurrent);
+  assert.match(maintenance, /if \(\$Action -eq 'Update' -and \$Resume -and \(Test-Path -LiteralPath \$root\) -and \(Test-Enrollment\)\)/);
+});
+
 test("Windows recovery gate accepts the current packaged installer version", () => {
   assert.ok(staged.includes(`'${packageLock.package_version}'`));
+  assert.ok(setup.includes(`AppVersion=${packageLock.package_version}`));
+  assert.ok(setup.includes(`OutputBaseFilename=KTK-Qwen-MCP-Setup-${packageLock.package_version}-TEST-UNSIGNED`));
 });
 
 test("one-time user task runs only in the original non-elevated login without passwords", () => {
