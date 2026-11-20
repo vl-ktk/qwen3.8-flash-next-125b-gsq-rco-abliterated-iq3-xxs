@@ -1,6 +1,6 @@
 # HANDOFF — Qwen 125B / Windows MCP
 
-Дата: 2026-11-19. Источник: `vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs`, `main`. Рабочую Cloudflare v11 до согласованной установки не менять.
+Дата: 2026-11-20. Источник: `vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs`, `main`. Рабочую Cloudflare v11 до согласованной установки не менять.
 
 ## Рабочая версия / откат
 - Cloudflare Worker `qwen125b-mcp` **v11**: version `8e719c62-5316-434d-b092-fd0f3cdc81d5`, deployment `5667dd47-6d10-47d8-a9dc-ab8d262047f1` (100% при последней проверке). OAuth code→token подтверждён владельцем; полный MCP Windows-origin пока не проверен.
@@ -46,12 +46,18 @@
 - `src/windows/administration.mjs`: `getAdminStatus`, `checkLocalHealth`, управление строго определённой `KTKQwenMCP` через `sc.exe` с подтверждением, ожидание STOPPED при restart, правила восстановления только службы (без OS reboot), локальная одноразовая привязка перезагрузки и безопасный graceful shutdown.
 - `src/windows/admin-cli.mjs`: локальные `status`/`health`, интерактивные `start`/`stop`/`restart`/`configure_recovery`/`reboot`; без TTY и Windows привилегированные операции запрещены. Удалённый MCP предоставляет только read-only `admin_status` (`qwen:read`), не сервисные команды.
 - Исправлено расхождение `/healthz` vs `/health`: основной endpoint `/healthz`, старый `/health` сохранён. Runtime `0.13.0`. Перезагрузка: 60 секунд на код и дополнительную фразу, затем отменяемый локальный 120-секундный таймер и `shutdown /r /t 0` **без forced closure**; `shutdown /t 120` не использовать из-за неявного `/f` по документации Microsoft. `update` не реализован до пункта 17, статус честно сообщает `installer_required`.
-- Автоматические тесты (включая mock `sc.exe`, reboot и loopback HTTP) выполняются в Linux, без действий на реальной Windows; отчёт `docs/STEP_13_REPORT.md`. Текущий источник `feature/step13-local-administration` до слияния, CI после push уточнить.
+- Автоматические тесты (включая mock `sc.exe`, reboot и loopback HTTP) выполняются в Linux, без действий на реальной Windows; отчёт `docs/STEP_13_REPORT.md`. **PR #16 MERGED** (squash `eeda085abd7aecd838d08607497b2550a463bfba`), **GitHub CI #44684503752 SUCCESS**, 86/86 тестов.
 - **Production Cloudflare не менялся в рамках пункта 13**. Последняя подтверждённая ранее версия — v11; перед будущим развёртыванием повторно сверить актуальную версию и откат.
+
+## Пункт 14 — защищённые origin-запросы и аварийный отзыв (без выкладки на ПК)
+- `src/cloudflare/origin-auth.mjs` и `src/windows/origin-auth.mjs`: одноразовая HMAC-SHA-256 подпись **каждого** запроса Worker → VPC origin, включая Ed25519 `/device/attest` и `/mcp` (GET/POST/DELETE). Подписаны метод, маршрут, точные байты body через SHA-256, timestamp и 128-битный nonce. Windows сравнивает HMAC constant-time, окно ±45 с, replay cache, лимит 2048 nonce. Неавторизованный локальный процесс на `127.0.0.1:8765` теперь получает 403. Без ключа default-deny. HTTP `/healthz` остаётся публичным локальным индикатором готовности, кроме режима emergency lock.
+- `src/windows/main.mjs` при запуске требует `QWEN_MCP_GATEWAY_KEY_PATH` (файл с 32-байтовым секретом в base64url) и `QWEN_MCP_EMERGENCY_LOCK_PATH`. Облачный Worker требует **тот же** secret binding `QWEN_MCP_GATEWAY_KEY`. Ни один ключ в Git не сохранялся; текущий опубликованный Worker **не менялся**. Синхронная выдача и NTFS ACL — задача установщика (15–16), без неё новые source-сборки fail-closed.
+- `src/windows/emergency-lock.mjs`, `admin-cli.mjs`: `lock`/`unlock` только в локальном интерактивном Windows-CLI с буквальным подтверждением. Наличие защищённого маркера блокирует MCP, attestation и health без рестарта; ошибка проверки состояния тоже блокирует. Аудит: существующий DO-аудит (7 дней); Windows выводит только фиксированные коды событий, без аргументов, токенов и данных инструментов. Логи и ACL обязан настроить установщик.
+- `src/windows/security.test.mjs`, тест Cloudflare HMAC, end-to-end с реальным loopback; проверяется подделка, устаревшая подпись, replay, изменение body/path/method, аварийная блокировка. Проверки и PR/CI: `docs/STEP_14_REPORT.md`. **Живая Windows не проверена.**
 
 ## Что осталось
 - Пункт 7: полноценная сквозная проверка ChatGPT → VPC → Windows. Tunnel `ktk-qwen125b-friend-pc` пока inactive (0 соединений), Windows MCP разработан локально, но не установлен; реальное соединение отсутствует.
 - Пункт 8: HTTP origin `/device/attest` в Windows MCP реализован (п.10), остаётся защитить локальный приватный ключ ACL и подключить pairing к установщику (п.15–16). До приёмки отмечать [ ].
-- Завершить GitHub-проверку и CI пункта 13, затем пункт 14–18 (привилегии, установщик и обслуживание). **Решение владельца:** все доступные тесты делаем сами; его Windows ПК не трогаем до одной общей тестовой установки после подготовки пакета. Затем исправления и окончательный архив для ПК друга.
+- После GitHub-проверки и CI пункта 14 перейти к пунктам 15–18: Windows-установщик, NTFS ACL, ограниченный аккаунт службы, provision двух концов HMAC, защищённый локальный журнал, нормальное восстановление/удаление и тесты. **Решение владельца:** все доступные тесты делаем сами; его Windows ПК не трогаем до одной общей тестовой установки после подготовки пакета. Затем исправления и окончательный архив для ПК друга.
 
 План: `docs/ROADMAP_24.md`; исходная OAuth диагностика: `docs/STEP_7_REPORT.md`.
