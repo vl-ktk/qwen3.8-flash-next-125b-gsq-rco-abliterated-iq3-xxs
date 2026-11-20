@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { listenWindowsMcp } from "./mcp-server.mjs";
 import { createWindowsToolRegistry } from "./windows-tools.mjs";
-import { checkLocalHealth, createGracefulShutdown, createLocalRebootGate, createLocalServiceController, getAdminStatus, WINDOWS_MCP_VERSION, WINDOWS_SERVICE_NAME } from "./administration.mjs";
+import { checkLocalHealth, createGracefulShutdown, createLocalRebootGate, createLocalServiceController, getAdminStatus, readInstalledPackageVersion, WINDOWS_MCP_VERSION, WINDOWS_SERVICE_NAME } from "./administration.mjs";
 import { runAdminCli } from "./admin-cli.mjs";
 
 test("loopback /healthz returns bounded readiness and runtime version", async t => {
@@ -36,12 +36,28 @@ test("admin status reports only verifiable local service and pairing facts", asy
   assert.equal(ready.mcp.uptime_seconds, 18);
   assert.equal(ready.mcp.local_identity_configured, true);
   assert.equal(ready.mcp.cloud_pairing, "not_checked");
-  assert.equal(ready.updates.status, "installer_required");
-  assert.equal(ready.recovery.status, "pending_installer");
-  assert.equal(ready.recovery.automatic_os_reboot, false);
+  assert.equal(ready.updates.status, "not_checked");
+  assert.equal(ready.recovery.status, "not_checked");
+  assert.equal(ready.recovery.automatic_os_reboot, null);
+  const installed = await getAdminStatus({ ...base, readPackageVersion: async () => "0.18.3" });
+  assert.deepEqual(installed.updates, { status: "installed", installed_version: "0.18.3" });
+  assert.equal((await getAdminStatus({ ...base, readPackageVersion: async () => { throw Error("private"); } })).updates.installed_version, null);
   assert.equal((await getAdminStatus({ ...base, queryService: async () => [] })).windows_service.status, "not_installed");
   assert.equal((await getAdminStatus({ ...base, queryService: async () => { throw Error("secret"); } })).windows_service.status, "unavailable");
   assert.equal((await getAdminStatus()).mcp.status, "not_checked");
+});
+
+test("installed version reads only validated colocated manifest with bounded size", async () => {
+  const executable = "C:\\Program Files\\KTK\\QwenMCP\\bin\\node.exe";
+  const paths = [];
+  const inspect = async p => { paths.push(p); return { isFile: () => true, size: 512 }; };
+  const read = async p => { paths.push(p); return JSON.stringify({ schema: 1, target: "windows-x64", package_version: "0.18.3" }); };
+  assert.equal(await readInstalledPackageVersion({ executable, read, inspect }), "0.18.3");
+  assert.deepEqual(paths, ["C:\\Program Files\\KTK\\QwenMCP\\MANIFEST.json", "C:\\Program Files\\KTK\\QwenMCP\\MANIFEST.json"]);
+  assert.equal(await readInstalledPackageVersion({ executable: "C:\\Temp\\node.exe", read, inspect }), null);
+  assert.equal(await readInstalledPackageVersion({ executable, read: async () => '{"package_version":"0.18.3"}', inspect }), null);
+  assert.equal(await readInstalledPackageVersion({ executable, read: async () => '{"schema":1,"target":"windows-x64","package_version":"bad"}', inspect }), null);
+  assert.equal(await readInstalledPackageVersion({ executable, read, inspect: async () => ({ isFile: () => true, size: 1048577 }) }), null);
 });
 
 test("Windows service controller defaults to deny and uses fixed sc.exe arguments", async () => {
@@ -207,7 +223,7 @@ test("local CLI status never claims a deployed update, even without Windows", as
   assert.equal(status.mcp.status, "unavailable");
   assert.equal(status.windows_service.status, "unavailable");
   assert.equal(status.updates.installed_version, null);
-  assert.equal(status.recovery.automatic_os_reboot, false);
+  assert.equal(status.recovery.automatic_os_reboot, null);
 });
 
 test("local reboot CLI accepts only both confirmations and cancels on Enter", async () => {
