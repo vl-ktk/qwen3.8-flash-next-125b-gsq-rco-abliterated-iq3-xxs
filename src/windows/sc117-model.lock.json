@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "repository": "SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF",
+  "revision": "90a3350cd800ec1fe0d1660a38414ad9e985782f",
+  "quantization": "IQ3_XXS",
+  "strata_version": "0.2.17",
+  "packer": {
+    "source": "Niko1221/Strata@v0.2.17:terminal/tools/iq_pack.py",
+    "bytes": 44648,
+    "sha256": "95e04b4a1f6a16e4ad5d1f13b4ecad0005a4fd22e9fc9a357fe1666922b8950d"
+  },
+  "files": [
+    {
+      "path": "IQ3_XXS/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_XXS-00001-of-00002.gguf",
+      "bytes": 47342144896,
+      "sha256": "03b11926b41a3d7f7a008882b1bc7a6330a3c9c43d3cad4598d31dc73042fdc5"
+    },
+    {
+      "path": "IQ3_XXS/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_XXS-00002-of-00002.gguf",
+      "bytes": 28800138432,
+      "sha256": "316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
+    },
+    {
+      "path": "strata/rt/dense.bin",
+      "bytes": 116099072,
+      "sha256": "c724dc0b0822ada5d2977bf5bde821605feabaa64ea2e0045b67ca656329070a"
+    },
+    {
+      "path": "strata/rt/dense.txt",
+      "bytes": 1880,
+      "sha256": "8773c81ebb0986e37fe94a8a9933e87be48b1fabc6889a0106bcdab179d1c2ac"
+    },
+    {
+      "path": "strata/rt/draft_vocab.bin",
+      "bytes": 425196,
+      "sha256": "b1e1d3a7a9e4bf862dcd5923ce661fb59bbd07907e594df5cf86a62ac235cb91"
+    },
+    {
+      "path": "strata/rt/experts.bin",
+      "bytes": 707788800,
+      "sha256": "09398406be61f1f54c93861f449e48b8df0bfccbc9ec9b2b7636775a6ea9244f"
+    }
+  ]
+}
