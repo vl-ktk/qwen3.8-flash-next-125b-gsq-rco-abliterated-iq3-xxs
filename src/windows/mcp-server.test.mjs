@@ -11,7 +11,7 @@ const info = { name: "test-client", version: "1" };
 const baseHeaders = { "content-type": "application/json", accept: "application/json, text/event-stream" };
 
 async function fixture(t, options = {}) {
-  const server = await listenWindowsMcp({ port: 0, ...options });
+  const server = await listenWindowsMcp({ port: 0, originVerifier: () => true, ...options });
   t.after(async () => { if (server.listening) await new Promise(resolve => server.close(resolve)); });
   const root = `http://127.0.0.1:${server.address().port}`;
   const post = (method, params = {}, extra = {}, id = 1) => fetch(`${root}/mcp`, {
@@ -37,7 +37,7 @@ async function fixture(t, options = {}) {
 test("bind only to localhost; health is transparent about untested model", async t => {
   const f = await fixture(t);
   assert.equal(f.server.address().address, "127.0.0.1");
-  assert.deepEqual(await (await fetch(f.root + "/health")).json(), { status: "ready", transport: "streamable-http", model: "not_checked", version: "0.13.0" });
+  assert.deepEqual(await (await fetch(f.root + "/health")).json(), { status: "ready", transport: "streamable-http", model: "not_checked", version: "0.14.0" });
   await assert.rejects(() => listenWindowsMcp({ host: "0.0.0.0", port: 0 }), /invalid_bind_address/);
 });
 
@@ -87,7 +87,7 @@ test("modern discover, list and errors are stateless with metadata", async t => 
   const d = (await discover.json()).result;
   assert.deepEqual(d.supportedVersions, [MODERN, LEGACY]);
   assert.equal(d.resultType, "complete");
-  assert.deepEqual(d._meta["io.modelcontextprotocol/serverInfo"], { name: "qwen125b-windows-mcp", version: "0.13.0" });
+  assert.deepEqual(d._meta["io.modelcontextprotocol/serverInfo"], { name: "qwen125b-windows-mcp", version: "0.14.0" });
   const list = await f.modern("tools/list");
   assert.equal(list.status, 200);
   assert.deepEqual((await list.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status"]);
