@@ -7,6 +7,7 @@ const maintenance = readFileSync(new URL("../../scripts/Maintain-KTKMCP.ps1", im
 const integrated = readFileSync(new URL("../../scripts/Run-KTKIntegratedAcceptance.ps1", import.meta.url), "utf8");
 const staged = readFileSync(new URL("../../scripts/Assert-KTKStaged.ps1", import.meta.url), "utf8");
 const packageLock = JSON.parse(readFileSync(new URL("../../config/windows-package.lock.json", import.meta.url), "utf8"));
+const windowsCi = readFileSync(new URL("../../.github/workflows/windows-package.yml", import.meta.url), "utf8");
 
 test("integrated live installer updates enrolled MCP, then runs AI under original user", () => {
   assert.match(setup, /Mode = '-Live'[\s\S]*?Run-KTKIntegratedAcceptance\.ps1/);
@@ -47,6 +48,15 @@ test("owner-run live upgrade rotates a preexisting verified rollback only after 
   assert.ok(verifiesBackup < stopsServices && stopsServices < stagesReplacement);
   assert.ok(stagesReplacement < rotates && rotates < preservesCurrent);
   assert.match(maintenance, /if \(\$Action -eq 'Update' -and \$Resume -and \(Test-Path -LiteralPath \$root\) -and \(Test-Enrollment\)\)/);
+});
+
+test("PowerShell script calls never rely on stale or undefined native LASTEXITCODE", () => {
+  assert.doesNotMatch(integrated, /if \(\$LASTEXITCODE/);
+  assert.match(integrated, /Maintain-KTKMCP\.ps1'\) -Action Update[^\n]*\n[\s\S]*?if \(-not \$\?\)/);
+  assert.match(integrated, /Run-KTKAcceptance\.ps1'\) -Live[\s\S]*?if \(-not \$\?\)/);
+  assert.match(maintenance, /Verify-KTKPackage\.ps1'\) \| Out-Null[\s\S]*?if \(-not \$\?\)/);
+  assert.match(windowsCi, /Exercise real rollback verification under StrictMode without LASTEXITCODE/);
+  assert.match(windowsCi, /rollback-strictmode\.ps1/);
 });
 
 test("Windows recovery gate accepts the current packaged installer version", () => {

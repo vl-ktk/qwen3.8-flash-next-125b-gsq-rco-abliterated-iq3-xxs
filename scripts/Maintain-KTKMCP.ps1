@@ -213,7 +213,10 @@ if ($rotatePrevious) {
     Assert-OrdinaryDirectory $previous
     Assert-NoLinks $previous
     & (Join-Path $previous 'Verify-KTKPackage.ps1') | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'previous_package_verification_failed' }
+    # Verify-KTKPackage.ps1 is a PowerShell script, not a native executable.
+    # It throws on validation failure and does not set $LASTEXITCODE. Under
+    # StrictMode, reading an unset $LASTEXITCODE aborts a valid upgrade.
+    if (-not $?) { throw 'previous_package_verification_failed' }
 }
 
 # Fail closed on interrupted maintenance, regardless of whether services stop.
