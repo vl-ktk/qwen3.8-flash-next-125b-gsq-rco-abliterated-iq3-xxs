@@ -41,11 +41,16 @@ var
   ExitCode: Integer;
   PowerShell: String;
   Args: String;
+  Mode: String;
+  Index: Integer;
 begin
   if CurStep <> ssPostInstall then Exit;
   PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  Mode := '-Live';
+  for Index := 1 to ParamCount do
+    if Uppercase(ParamStr(Index)) = '/OFFLINE' then Mode := '-Offline';
   Args := '-NoProfile -ExecutionPolicy Bypass -File "' +
-    ExpandConstant('{tmp}\KTKPayload\Run-KTKAcceptance.ps1') + '" -Live';
+    ExpandConstant('{tmp}\KTKPayload\Run-KTKAcceptance.ps1') + '" ' + Mode;
   if not Exec(PowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode) then
     RaiseException('Could not run KTK acceptance; see Windows error ' + IntToStr(ExitCode));
   if ExitCode <> 0 then
