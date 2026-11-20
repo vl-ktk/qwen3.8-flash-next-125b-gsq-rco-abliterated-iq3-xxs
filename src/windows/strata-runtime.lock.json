@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "upstream": "Niko1221/Strata",
+  "app_version": "0.2.17",
+  "control_version": "0.1.63",
+  "feed": "https://github.com/Niko1221/Strata/releases/download/v0.2.17",
+  "script": {
+    "name": "install.ps1",
+    "url": "https://github.com/Niko1221/Strata/releases/download/v0.2.17/install.ps1",
+    "bytes": 16171,
+    "sha256": "2dfcaabadae42e1f66ac821244db1dfbef5832b3e9711842ed55ae50163837d8"
+  },
+  "terminal": {
+    "name": "strata-control-0.1.63-windows-x86_64.zip",
+    "bytes": 67629223,
+    "sha256": "2d7cb26aa0c36db65e0d71eafa048227a4098c4b0dd70423d507cdf8f7cba44d"
+  },
+  "engines": {
+    "cuda12": {
+      "name": "strata-engine-0.1.63-windows-x86_64-cuda-cuda12.tar.gz",
+      "bytes": 739713051,
+      "sha256": "8f214b7f7de11c67f91a604c4066a48c4fb282ad3b51e0e970e30ada846fe6ed"
+    },
+    "cuda13": {
+      "name": "strata-engine-0.1.63-windows-x86_64-cuda-cuda13.tar.gz",
+      "bytes": 487577860,
+      "sha256": "fc9864851a3f76855f25ba5f5ff1eb42d46c3c6ed45c22534dc9910f20d9dc0f"
+    }
+  }
+}
