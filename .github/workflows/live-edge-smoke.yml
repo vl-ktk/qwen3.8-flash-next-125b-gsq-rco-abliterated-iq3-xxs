@@ -31,7 +31,7 @@ jobs:
             let data = null;
             try { data = JSON.parse(body); } catch { /* Keep status + content type only. */ }
             console.log(`${path}: HTTP ${response.status}; JSON ${Boolean(data)}`);
-            return { response, data };
+            return { response, data, body };
           }
 
           const status = await get('/__edge_status');
@@ -50,5 +50,14 @@ jobs:
           assert.equal(unauthenticatedMcp.response.status, 401, 'MCP must deny anonymous callers');
           assert.match(unauthenticatedMcp.response.headers.get('www-authenticate') ?? '', /Bearer/i);
 
-          console.log('Live public HTTP/OAuth smoke PASS. Tunnel and Windows MCP NOT tested.');
+          // The owner pairing page is public, but must never leak keys or
+          // accept untrusted JavaScript. Inspect headers/content only; never
+          // submit a pairing code, owner password or a device approval.
+          const pairingPage = await get('/device/pair/manage');
+          assert.equal(pairingPage.response.status, 200);
+          assert.match(pairingPage.response.headers.get('content-security-policy') ?? '', /script-src 'nonce-[A-Za-z0-9_-]{32}'/);
+          assert.match(pairingPage.body, /history\.replaceState\(null, "", location\.pathname\)/);
+          assert.doesNotMatch(pairingPage.body, /QWEN_MCP_GATEWAY_KEY|QWEN_TUNNEL_TOKEN/);
+
+          console.log('Live public HTTP/OAuth/pairing-page smoke PASS. Tunnel and Windows MCP NOT tested.');
           NODE
