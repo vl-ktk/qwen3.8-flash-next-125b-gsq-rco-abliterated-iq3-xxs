@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { OAuthStorage } from "./storage.mjs";
 import { ISSUER, RESOURCE, SCOPES, json, secure, challenge, readBody, oauthRequest, verify, isConfigured } from "./oauth.mjs";
 import { DEVICE_PATHS, devicePairRoute, attestDevice } from "./device-pairing.mjs";
+import { signedOriginHeaders } from "./origin-auth.mjs";
 
 // Read-only Windows tools. Mutations, service control, OS reboots and all
 // unknown names remain default-deny at the Cloudflare gateway.
@@ -146,13 +147,18 @@ export class QwenOAuthState extends DurableObject {
         if (!scope || !auth.scope.includes(scope)) return challenge("insufficient_scope", 403);
       } else if (!["initialize", "server/discover", "notifications/initialized", "notifications/cancelled", "ping", "tools/list"].includes(message.method)) return json(403, { error: "method_not_allowed" });
     }
-    const deviceFailure = await attestDevice(this.env.QWEN_MCP_ORIGIN, this.ctx.storage);
+    const deviceFailure = await attestDevice(this.env.QWEN_MCP_ORIGIN, this.ctx.storage, this.env.QWEN_MCP_GATEWAY_KEY);
     if (deviceFailure) return deviceFailure;
     // Fixed destination and header allowlist. Never send caller credentials or claims.
     const headers = new Headers();
     for (const name of ["accept", "content-type", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id"]) {
       if (request.headers.has(name)) headers.set(name, request.headers.get(name));
     }
+    // Avoid fetch() silently inserting an unsigned Accept: */* header.
+    if (!headers.has("accept")) headers.set("accept", "*/*");
+    const signed = await signedOriginHeaders(this.env.QWEN_MCP_GATEWAY_KEY, request.method, "/mcp", body ?? "", headers);
+    if (!signed) return json(503, { error: "origin_auth_not_configured" });
+    for (const [name, value] of Object.entries(signed)) headers.set(name, value);
     let upstream;
     try {
       upstream = await this.env.QWEN_MCP_ORIGIN.fetch(new Request("http://127.0.0.1:8765/mcp", {

@@ -1,5 +1,6 @@
 import { ISSUER, json, readBody, hash, isConfigured, passwordMatches, rateLimit } from "./oauth.mjs";
 import { OAuthStorage } from "./storage.mjs";
+import { signedOriginHeaders } from "./origin-auth.mjs";
 
 // This is the cloud half of Windows device enrollment, not a replacement for
 // user OAuth. No device private key or long-lived device credential is stored.
@@ -118,16 +119,19 @@ export async function devicePairRoute(request, env, storage) {
   return json(405, { error: "method_not_allowed" }, { allow: path === "/device/pair/manage" ? "GET, POST" : "POST" });
 }
 
-export async function attestDevice(origin, storage) {
+export async function attestDevice(origin, storage, gatewayKey) {
   const kv = new OAuthStorage(storage);
   const active = await kv.get("device:active", "json");
   if (!active) return json(503, { error: "device_not_paired" });
   if (!origin?.fetch) return json(503, { error: "origin_unavailable" });
   const nonce = base64url(random(32));
+  const deviceHeaders = new Headers({ accept: "application/json", "x-qwen-device-id": active.device_id, "x-qwen-device-nonce": nonce });
+  const signed = await signedOriginHeaders(gatewayKey, "GET", "/device/attest", "", deviceHeaders);
+  if (!signed) return json(503, { error: "origin_auth_not_configured" });
   let result;
   try {
     const response = await origin.fetch(new Request("http://127.0.0.1:8765/device/attest", {
-      method: "GET", headers: { "x-qwen-device-id": active.device_id, "x-qwen-device-nonce": nonce },
+      method: "GET", headers: { ...Object.fromEntries(deviceHeaders), ...signed },
       redirect: "manual", signal: AbortSignal.timeout(5000),
     }));
     if (!response.ok || !response.headers.get("content-type")?.startsWith("application/json")) return json(503, { error: "device_unavailable" });
