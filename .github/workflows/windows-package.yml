@@ -125,6 +125,9 @@ jobs:
           $exe = Join-Path $dst 'KTK-Qwen-MCP-Setup-0.18.0-TEST-UNSIGNED.exe'
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Setup.exe not generated' }
           (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($exe) | Set-Content -Path ($exe + '.sha256')
+          & $exe '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' '/OFFLINE'
+          if ($LASTEXITCODE -ne 0) { throw 'One-click Setup.exe offline lifecycle failed' }
+          if ((Get-Service KTKQwenMCP,KTKQwenTunnel -ErrorAction SilentlyContinue).Count -gt 0) { throw 'One-click Setup left test services behind' }
       - name: Upload standalone unsigned acceptance EXE (not production-ready)
         uses: actions/upload-artifact@v4
         with:
