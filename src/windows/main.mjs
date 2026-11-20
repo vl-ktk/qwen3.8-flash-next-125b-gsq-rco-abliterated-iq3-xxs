@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { listenWindowsMcp } from "./mcp-server.mjs";
 import { createWindowsToolRegistry } from "./windows-tools.mjs";
+import { createGracefulShutdown } from "./administration.mjs";
 
 // Step 15 installer will provide a Windows-ACL-protected identity file and
 // provision the paired device ID. Neither is bundled with distributables.
@@ -14,13 +15,9 @@ const server = await listenWindowsMcp({
   port: Number(process.env.QWEN_MCP_PORT ?? "8765"),
   identity,
   deviceId,
-  toolRegistry: createWindowsToolRegistry({ allowedFileRoots }),
+  toolRegistry: createWindowsToolRegistry({ allowedFileRoots, identityConfigured: Boolean(identity && deviceId) }),
 });
 
 process.stdout.write(`Qwen MCP loopback listening on 127.0.0.1:${server.address().port}\n`);
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => {
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(1), 5000).unref();
-  });
-}
+const gracefulShutdown = createGracefulShutdown(server, { exit: code => process.exit(code) });
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, gracefulShutdown);
