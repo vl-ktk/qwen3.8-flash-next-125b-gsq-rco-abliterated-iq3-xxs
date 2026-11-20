@@ -77,3 +77,27 @@ test("step16 enrollment activates only after owner approval, self-test and live 
   const tunnel = await load("../../config/KTKQwenTunnel.xml");
   assert.match(tunnel, /--metrics 127\.0\.0\.1:20241/);
 });
+
+test("step17 maintenance requires local confirmation, exact service ownership and fail-closed locks", async () => {
+  const script = await load("../../scripts/Maintain-KTKMCP.ps1");
+  assert.match(script, /ValidateSet\('Update','Repair','Rollback','Uninstall'\)/);
+  assert.match(script, /Read-Host/);
+  assert.match(script, /\[switch\]\$CheckOnly/);
+  assert.match(script, /ERASE-KTK-DATA/);
+  assert.match(script, /Assert-OwnedServices \$root/);
+  assert.match(script, /Assert-NoLinks \$data/);
+  assert.match(script, /Verify-KTKPackage\.ps1/);
+  assert.match(script, /Get-FileHash -LiteralPath \$inputFile/);
+  assert.match(script, /update_requires_newer_version/);
+  assert.match(script, /repair_requires_same_version/);
+  assert.match(script, /\[IO\.Directory\]::Move\(\$root, \$previous\)/);
+  assert.match(script, /\[IO\.Directory\]::Move\(\$previous, \$root\)/);
+  assert.match(script, /Set-ManualStopped/);
+  assert.match(script, /emergency\.lock/);
+  assert.match(script, /if \(\$Resume\) \{/);
+  assert.match(script, /SelfTest-KTKMCP\.mjs/);
+  assert.match(script, /cloudflared_tunnel_ha_connections/);
+  assert.match(script, /Revoke-KTKMCP\.mjs/);
+  assert.match(script, /Assert-Exit 'remote_revoke_required'/);
+  assert.doesNotMatch(script, /--token\s+ey|TUNNEL_TOKEN\s*=|QWEN_MCP_GATEWAY_KEY\s*=/);
+});
