@@ -4,6 +4,8 @@
 
 **Обновление 20.11: 0.18.3 / Worker v14.** [PR #35](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/35) MERGED, [Edge CI](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44720567960) 111/111 PASS, [Windows CI](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44720567982) 5/5 PASS. Cloudflare v14 version `480909f2-0926-4302-b7f1-f98a179952fb`, deployment `db2cb94a-1843-4ef4-aed1-64f9deebc32d`, 100%; откат v13 version `bb72da90-7be8-482f-a585-cd0e51c33b06`. Открытие страницы новой привязки без кодов в браузере владельца и end-to-end ещё не подтверждено; пункт 18 открыт.
 
+**Живой HTTPS v14:** первая проверка выявила старый HTML из DO из-за deferred code update. Повторный deployment v14 с immediate DO update — `c78206ab-c8a9-42a9-861f-9a7124926d04`; [live smoke #44723048490, повторный запуск](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44723048490) PASS для новой формы и обязательных OAuth/MCP отказов. Это не заменяет живую Windows/ChatGPT приёмку.
+
 ## Этап I. Подготовка проекта (1–4)
 - [x] **1. Зафиксировать архитектуру.** Один MCP-сервер на Windows друга, без отдельного Windows-агента/второй учётной записи. Сообщить конкретные ограничения служб и удалённого доступа.
 - [x] **2. Оформить отдельный исходник.** Приватный `vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs`, версии, README, план, тесты, HANDOFF.md, механизм отката.
