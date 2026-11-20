@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 import { realpath, stat, open } from "node:fs/promises";
 import path from "node:path";
 import { collectWindowsMonitoring, queryNvidiaGpus } from "./monitoring.mjs";
+import { getAdminStatus, WINDOWS_MCP_VERSION } from "./administration.mjs";
 
 const execFileAsync = promisify(execFile);
 const MAX_READ = 32 * 1024;
@@ -92,7 +93,7 @@ try {
 function validate(name, args) {
   if (!isRecord(args)) throw safeError("invalid_arguments");
   const keys = Object.keys(args);
-  if (name === "system_info" || name === "system_monitor") {
+  if (name === "system_info" || name === "system_monitor" || name === "admin_status") {
     if (keys.length) throw safeError("invalid_arguments");
     return {};
   }
@@ -139,6 +140,11 @@ export async function runPowerShellQuery(name, args, { platform = process.platfo
 }
 
 const DEFINITIONS = Object.freeze({
+  admin_status: {
+    name: "admin_status", description: "Read the local Windows MCP version, Windows service state, and pending installer/recovery capabilities. Does not change anything.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
   system_info: {
     name: "system_info", description: "Read Windows version, processor, core count and installed RAM. No changes.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -195,15 +201,20 @@ async function readAllowedFile(filePath, roots) {
   } finally { await fd.close(); }
 }
 
-export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery, readNvidia = queryNvidiaGpus } = {}) {
+export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery, readNvidia = queryNvidiaGpus, identityConfigured = false } = {}) {
   if (!Array.isArray(allowedFileRoots) || allowedFileRoots.some(root => typeof root !== "string" || !path.isAbsolute(root))) throw safeError("invalid_file_roots");
-  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", ...(allowedFileRoots.length ? ["file_read"] : [])];
+  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", ...(allowedFileRoots.length ? ["file_read"] : [])];
   return {
     list: () => available.map(name => structuredClone(DEFINITIONS[name])),
     has: name => available.includes(name),
     async call(name, args) {
       if (!available.includes(name)) throw safeError("unknown_tool");
       const params = validate(name, args);
+      if (name === "admin_status") return getAdminStatus({
+        paired: identityConfigured,
+        health: { status: "ready", version: WINDOWS_MCP_VERSION },
+        queryService: async serviceName => runWindowsQuery("service_status", { name: serviceName }),
+      });
       if (name === "file_read") return readAllowedFile(params.path, allowedFileRoots);
       if (name === "system_monitor") return collectWindowsMonitoring({ readSystem: () => runWindowsQuery(name, params), readGpu: readNvidia });
       return runWindowsQuery(name, params);

@@ -37,7 +37,7 @@ async function fixture(t, options = {}) {
 test("bind only to localhost; health is transparent about untested model", async t => {
   const f = await fixture(t);
   assert.equal(f.server.address().address, "127.0.0.1");
-  assert.deepEqual(await (await fetch(f.root + "/health")).json(), { status: "ready", transport: "streamable-http", model: "not_checked" });
+  assert.deepEqual(await (await fetch(f.root + "/health")).json(), { status: "ready", transport: "streamable-http", model: "not_checked", version: "0.13.0" });
   await assert.rejects(() => listenWindowsMcp({ host: "0.0.0.0", port: 0 }), /invalid_bind_address/);
 });
 
@@ -87,10 +87,10 @@ test("modern discover, list and errors are stateless with metadata", async t => 
   const d = (await discover.json()).result;
   assert.deepEqual(d.supportedVersions, [MODERN, LEGACY]);
   assert.equal(d.resultType, "complete");
-  assert.deepEqual(d._meta["io.modelcontextprotocol/serverInfo"], { name: "qwen125b-windows-mcp", version: "0.12.0" });
+  assert.deepEqual(d._meta["io.modelcontextprotocol/serverInfo"], { name: "qwen125b-windows-mcp", version: "0.13.0" });
   const list = await f.modern("tools/list");
   assert.equal(list.status, 200);
-  assert.deepEqual((await list.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status"]);
+  assert.deepEqual((await list.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status"]);
   const unknown = await f.modern("tools/call", { name: "powershell", arguments: {} });
   assert.equal(unknown.status, 400);
   assert.equal((await unknown.json()).error.code, -32602);
@@ -119,7 +119,7 @@ test("legacy initialize, required session, notification, ping, list, GET SSE, DE
   const f = await fixture(t);
   const sid = await f.startLegacy();
   assert.equal((await f.legacy("tools/list", {}, null)).status, 404);
-  assert.deepEqual((await (await f.legacy("tools/list", {}, sid)).json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status"]);
+  assert.deepEqual((await (await f.legacy("tools/list", {}, sid)).json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status"]);
   assert.equal((await f.legacy("ping", {}, sid)).status, 200);
   const notify = await fetch(f.root + "/mcp", { method: "POST", headers: { ...baseHeaders, "mcp-protocol-version": LEGACY, "mcp-session-id": sid }, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) });
   assert.equal(notify.status, 202);

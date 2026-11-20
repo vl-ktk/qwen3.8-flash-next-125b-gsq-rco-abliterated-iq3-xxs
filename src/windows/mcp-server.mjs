@@ -9,7 +9,7 @@ import { createWindowsToolRegistry } from "./windows-tools.mjs";
 const MODERN = "2026-07-28";
 const LEGACY = "2025-11-25";
 const SUPPORTED = [MODERN, LEGACY];
-const SERVER_INFO = Object.freeze({ name: "qwen125b-windows-mcp", version: "0.12.0" });
+const SERVER_INFO = Object.freeze({ name: "qwen125b-windows-mcp", version: "0.13.0" });
 const INSTRUCTIONS = "Read-only Windows tools only. No arbitrary PowerShell, writes, process controls or service changes. File read requires configured allowlisted directories.";
 const MAX_BODY = 64 * 1024;
 const SESSION_TTL = 24 * 60 * 60 * 1000;
@@ -95,8 +95,8 @@ export function createWindowsMcpServer({ port = 8765, host = "127.0.0.1", identi
       const url = new URL(req.url, `http://127.0.0.1:${actualPort}`);
       if (url.search || url.hash) return send(res, 400, { error: "invalid_request" });
 
-      if (url.pathname === "/health" && req.method === "GET") {
-        return send(res, 200, { status: "ready", transport: "streamable-http", model: "not_checked" });
+      if ((url.pathname === "/healthz" || url.pathname === "/health") && req.method === "GET") {
+        return send(res, 200, { status: "ready", transport: "streamable-http", model: "not_checked", version: SERVER_INFO.version });
       }
       if (url.pathname === "/device/attest" && req.method === "GET") {
         const id = req.headers["x-qwen-device-id"];
@@ -210,6 +210,13 @@ export function createWindowsMcpServer({ port = 8765, host = "127.0.0.1", identi
   server.maxHeadersCount = 32;
   server.headersTimeout = 10000;
   server.requestTimeout = 15000;
+  // Stop long-lived legacy event streams before draining the HTTP server.
+  server.endMcpStreams = () => {
+    for (const id of [...streams.keys()]) {
+      for (const res of streams.get(id)) if (!res.destroyed && !res.writableEnded) res.end();
+      streams.delete(id);
+    }
+  };
   server.on("close", () => {
     for (const id of [...sessions.keys()]) dropSession(id);
   });
