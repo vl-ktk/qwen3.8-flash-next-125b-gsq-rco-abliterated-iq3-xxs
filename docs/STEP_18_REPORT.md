@@ -9,7 +9,7 @@
 - `config/KTK-Setup.iss`: Inno Setup, один `KTK-Qwen-MCP-Setup-0.18.0-TEST-UNSIGNED.exe`, содержащий только manifest-verified payload. Двойной клик открывает установщик; UAC обязателен. Это **не подписанный production setup**; Windows SmartScreen может показать предупреждение.
 - `scripts/Run-KTKAcceptance.ps1 -Live`: автоматически проверяет SHA256/manifest, версию Windows, диск, порты, отсутствие конфликтующих KTK-служб/директорий, затем вызывает существующую защищённую установку/привязку, проверяет обе службы `LocalService` и emergency marker, сохраняет текстовый отчёт `KTK-MCP-Test-*.txt` на рабочем столе. Пользователю не требуется открывать PowerShell или вводить команды. **Один раз потребуется подтверждение Windows UAC и пары на странице Worker** (выдача секрета без подтверждения запрещена).
 - `-Offline` предназначен только для автоматических тестов GitHub: реальная установка двух служб Manual/Stopped, проверка новых identity/lock и отсутствия credentials, затем удаление только своего свежего тестового экземпляра. Никаких Cloudflare запросов.
-- `windows-package.yml`: Node/Linux suite; PowerShell 5 parser; Windows `-CheckOnly`; отдельный Windows-hosted job реальных SCM/ACL/cleanup; Inno Setup compile в единый EXE и SHA256. ZIP/EXE upload GitHub Actions. Все результаты будут записаны после CI.
+- `windows-package.yml`: Node/Linux suite; PowerShell 5 parser; Windows `-CheckOnly`; отдельный Windows-hosted job реальных SCM/ACL/cleanup; Inno Setup compile в единый EXE и SHA256 **и запуск именно этого EXE в CI с внутренним `/OFFLINE`-режимом**, чтобы проверить фактическую установку/удаление. ZIP/EXE upload GitHub Actions. Все результаты будут записаны после CI.
 
 ## Чего **пока нет**
 
