@@ -104,7 +104,9 @@ try {
     & icacls.exe $stage '/T' '/C' '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-19:RX' | Out-Null
     Assert-NativeSuccess 'acl_recursive'
 
-    New-Item -ItemType Directory -Path $dataRoot -Force -ErrorAction Stop | Out-Null
+    # Never force-merge a newly appeared destination: catch races without deleting user data.
+    if (Test-Path -LiteralPath $dataRoot) { throw 'existing_install_requires_repair_step_17' }
+    New-Item -ItemType Directory -Path $dataRoot -ErrorAction Stop | Out-Null
     $dataCreated = $true
     Set-ProtectedAcl $dataRoot $false
     foreach ($leaf in @('secrets','state','logs')) {
