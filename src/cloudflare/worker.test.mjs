@@ -6,6 +6,7 @@ import { readFile, mkdir, mkdtemp } from "node:fs/promises";
 import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";
 import { buildSync } from "esbuild";
 import { generateDeviceIdentity, signDeviceAttestation } from "../windows/device-identity.mjs";
+import { createDeviceBootstrapSession, openBootstrapEnvelope } from "../windows/device-bootstrap.mjs";
 import { listenWindowsMcp } from "../windows/mcp-server.mjs";
 import { createWindowsToolRegistry } from "../windows/windows-tools.mjs";
 
@@ -21,8 +22,9 @@ const password = randomBytes(32).toString("hex");
 const verifier = randomBytes(32).toString("base64url");
 const codeChallenge = createHash("sha256").update(verifier).digest("base64url");
 const gatewayKey = randomBytes(32).toString("base64url");
+const tunnelToken = randomBytes(64).toString("base64url");
 
-async function fixture(t, { configured = true, gatewayConfigured = true, state = true, upstream, originBackend, ownerPassword = password, persistPath, paired = true, attestation = "valid", deviceIdentity, deviceIdOverride } = {}) {
+async function fixture(t, { configured = true, gatewayConfigured = true, tunnelConfigured = false, state = true, upstream, originBackend, ownerPassword = password, persistPath, paired = true, attestation = "valid", deviceIdentity, deviceIdOverride } = {}) {
   const calls = [];
   const identity = deviceIdentity ?? await generateDeviceIdentity();
   const deviceId = deviceIdOverride ?? randomBytes(24).toString("base64url");
@@ -33,7 +35,7 @@ async function fixture(t, { configured = true, gatewayConfigured = true, state =
     compatibilityDate: "2026-11-17", compatibilityFlags: ["global_fetch_strictly_public"], log: new Log(LogLevel.ERROR),
     outboundService: () => { throw Error("External network forbidden in tests"); },
     durableObjects: state ? { QWEN_OAUTH_STATE: { className: "TestOAuthState", useSQLite: true } } : {},
-    bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: ownerPassword, QWEN_OAUTH_GENERATION: "1", ...(gatewayConfigured ? { QWEN_MCP_GATEWAY_KEY: gatewayKey } : {}) } : {},
+    bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: ownerPassword, QWEN_OAUTH_GENERATION: "1", ...(gatewayConfigured ? { QWEN_MCP_GATEWAY_KEY: gatewayKey } : {}), ...(tunnelConfigured ? { QWEN_TUNNEL_TOKEN: tunnelToken } : {}) } : {},
     serviceBindings: { QWEN_MCP_ORIGIN: async request => {
       if (originBackend) return originBackend(request);
       if (new URL(request.url).pathname === "/device/attest") {
@@ -622,9 +624,52 @@ async function deviceForm(f, fields, headers = {}) {
     "content-type": "application/x-www-form-urlencoded", "origin": target, "sec-fetch-site": "same-origin", ...headers,
   }, body: new URLSearchParams({ proof, password, ...fields }).toString() });
 }
-const pairStart = (f, identity, label = "Windows Test") => f.send("/device/pair/start", {
+const pairStart = (f, identity, label = "Windows Test", bootstrapPublicKey) => f.send("/device/pair/start", {
   method: "POST", headers: { "content-type": "application/json" },
-  body: JSON.stringify({ public_key: identity.public_key, label }),
+  body: JSON.stringify({ public_key: identity.public_key, label, ...(bootstrapPublicKey ? { bootstrap_public_key: bootstrapPublicKey } : {}) }),
+});
+
+test("owner-approved bootstrap delivers secrets encrypted to the Windows ephemeral key once", async t => {
+  const f = await fixture(t, { paired: false, tunnelConfigured: true });
+  const recipient = await createDeviceBootstrapSession();
+  const startedResponse = await pairStart(f, f.identity, "Windows Test", recipient.public_key);
+  assert.equal(startedResponse.status, 201);
+  const started = await startedResponse.json();
+  const poll = () => f.send("/device/pair/status", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request_id: started.request_id }) });
+  assert.deepEqual(await (await poll()).json(), { state: "pending" });
+  assert.equal((await deviceForm(f, { action: "approve", code: started.user_code, fingerprint: "A".repeat(16) })).status, 403);
+  assert.deepEqual(await (await poll()).json(), { state: "pending" });
+  assert.equal((await deviceForm(f, { action: "approve", code: started.user_code, fingerprint: started.fingerprint })).status, 200);
+  const reply = await (await poll()).json();
+  assert.equal(reply.state, "approved");
+  assert.equal(reply.bootstrap.version, 1);
+  assert.doesNotMatch(JSON.stringify(reply), new RegExp(gatewayKey));
+  assert.doesNotMatch(JSON.stringify(reply), new RegExp(tunnelToken));
+  const clear = await openBootstrapEnvelope(recipient, reply.bootstrap, { requestId: started.request_id, deviceId: reply.device_id });
+  assert.deepEqual(clear, { device_id: reply.device_id, gateway_key: gatewayKey, tunnel_token: tunnelToken });
+  const otherSession = await createDeviceBootstrapSession();
+  await assert.rejects(() => openBootstrapEnvelope(otherSession, reply.bootstrap, { requestId: started.request_id, deviceId: reply.device_id }), /bootstrap_decryption_failed/);
+  await assert.rejects(() => openBootstrapEnvelope(recipient, { ...reply.bootstrap, nonce: "A".repeat(16) }, { requestId: started.request_id, deviceId: reply.device_id }), /bootstrap_decryption_failed/);
+  await assert.rejects(() => openBootstrapEnvelope(recipient, reply.bootstrap, { requestId: "B".repeat(32), deviceId: reply.device_id }), /bootstrap_decryption_failed/);
+  const again = await (await poll()).json();
+  assert.deepEqual(again, { state: "approved", device_id: reply.device_id });
+  const audit = await (await f.stub()).audit();
+  assert.doesNotMatch(JSON.stringify(audit), new RegExp(tunnelToken));
+  assert.doesNotMatch(JSON.stringify(audit), new RegExp(gatewayKey));
+});
+
+test("bootstrap is unavailable without both cloud secrets; invalid transport key refused", async t => {
+  const f = await fixture(t, { paired: false, tunnelConfigured: false });
+  const session = await createDeviceBootstrapSession();
+  const unavailable = await pairStart(f, f.identity, "Windows Test", session.public_key);
+  assert.equal(unavailable.status, 503);
+  assert.deepEqual(await unavailable.json(), { error: "bootstrap_not_configured" });
+  const invalid = await pairStart(f, f.identity, "Windows Test", "A".repeat(87));
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(await invalid.json(), { error: "invalid_bootstrap_key" });
+  // The legacy approval flow remains available for existing tests/clients,
+  // but it never returns a tunnel token or shared gateway secret.
+  assert.equal((await pairStart(f, f.identity)).status, 201);
 });
 
 test("device pairing demands owner approval, fingerprint and proof of Ed25519 possession", async t => {
