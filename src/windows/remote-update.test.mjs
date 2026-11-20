@@ -110,6 +110,20 @@ test("release fetch hashes actual bytes, rejects redirects and size mismatch", a
   await assert.rejects(() => downloadVerifiedRelease({ ...offer, sha256: "f".repeat(64) }, path.join(dir, "bad.zip"), { fetcher }), /update_checksum_mismatch/);
   await assert.rejects(() => downloadVerifiedRelease(offer, path.join(dir, "limit.zip"), { fetcher, maxBytes: 2 }), /update_too_large/);
   await assert.rejects(() => downloadVerifiedRelease(offer, path.join(dir, "redirect.zip"), { fetcher: async () => new Response(null, { status: 302, headers: { location: "https://evil.example/installer" } }) }), /update_source_denied/);
+  let calls = 0;
+  const officialGithubRelease = await downloadVerifiedRelease(offer, path.join(dir, "github-release.zip"), {
+    fetcher: async url => {
+      calls++;
+      if (calls === 1) {
+        assert.equal(url, offer.url);
+        return new Response(null, { status: 302, headers: { location: "https://release-assets.githubusercontent.com/github-production-release-asset-fixture" } });
+      }
+      assert.match(url, /^https:\/\/release-assets\.githubusercontent\.com\//);
+      return new Response(bytes, { status: 200 });
+    },
+  });
+  assert.equal(officialGithubRelease, bytes.length);
+  assert.equal(calls, 2);
 });
 
 test("privileged updater runs only its bundled fixed PS script with fixed argument flags", async t => {

@@ -1,0 +1,139 @@
+name: Publish verified Windows update release
+
+on:
+  push:
+    branches: [main]
+    paths: ["config/windows-package.lock.json"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ktk-update-release
+  cancel-in-progress: false
+
+jobs:
+  verify-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - id: version
+        name: Derive immutable package version
+        shell: bash
+        run: |
+          V=$(node -p 'JSON.parse(require("fs").readFileSync("config/windows-package.lock.json", "utf8")).package_version')
+          if [[ ! "$V" =~ ^0\.18\.[1-9][0-9]{0,3}$ ]]; then exit 1; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+      - name: Source integrity and offline tests
+        run: |
+          npm ci
+          npm test
+          npm run check
+          npm run check:local-ai
+      - name: Fetch exclusively pinned vendor binaries
+        run: node scripts/fetch-windows-vendors.mjs .generated/windows-vendors
+      - name: Generate entire release with source SHA
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p .generated/packages
+          node scripts/build-windows-package.mjs .generated/windows-vendors ".generated/packages/KTK-Windows-MCP-${VERSION}-win-x64.zip" "$GITHUB_SHA"
+          cd .generated/packages
+          sha256sum --check "KTK-Windows-MCP-${VERSION}-win-x64.zip.sha256"
+          unzip -t "KTK-Windows-MCP-${VERSION}-win-x64.zip"
+          unzip -p "KTK-Windows-MCP-${VERSION}-win-x64.zip" MANIFEST.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{const j=JSON.parse(s);if(j.package_version!==process.env.VERSION||j.source_commit!==process.env.GITHUB_SHA||j.ready_for_installation!==false||j.files.length<55)process.exit(1)})'
+          zip -0 -q -j "KTK-Update-${VERSION}.zip" "KTK-Windows-MCP-${VERSION}-win-x64.zip" "KTK-Windows-MCP-${VERSION}-win-x64.zip.sha256"
+          sha256sum "KTK-Update-${VERSION}.zip" > "KTK-Update-${VERSION}.zip.sha256"
+          unzip -Z1 "KTK-Update-${VERSION}.zip" | sort | diff -u <(printf '%s\n' "KTK-Windows-MCP-${VERSION}-win-x64.zip" "KTK-Windows-MCP-${VERSION}-win-x64.zip.sha256" | sort) -
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-outer
+          path: |
+            .generated/packages/KTK-Update-${{ steps.version.outputs.version }}.zip
+            .generated/packages/KTK-Update-${{ steps.version.outputs.version }}.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-inner
+          path: |
+            .generated/packages/KTK-Windows-MCP-${{ steps.version.outputs.version }}-win-x64.zip
+            .generated/packages/KTK-Windows-MCP-${{ steps.version.outputs.version }}-win-x64.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+  verify-windows-setup:
+    needs: verify-package
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-release-inner
+          path: candidate
+      - name: Compile and offline smoke-test Windows Setup.exe
+        shell: powershell
+        env:
+          VERSION: ${{ needs.verify-package.outputs.version }}
+        run: |
+          Expand-Archive -LiteralPath "candidate/KTK-Windows-MCP-$env:VERSION-win-x64.zip" -DestinationPath 'candidate/extracted'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Install-KTKUserUpdater.ps1' -CheckOnly
+          if ($LASTEXITCODE -ne 0) { throw 'User updater payload invalid' }
+          $compiler = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $compiler) { choco install innosetup --no-progress -y; $compiler = (Get-Command ISCC.exe -ErrorAction Stop).Source }
+          New-Item -ItemType Directory -Path 'candidate/setup' -Force | Out-Null
+          $src = (Resolve-Path 'candidate/extracted').Path
+          $dst = (Resolve-Path 'candidate/setup').Path
+          & $compiler "/DSourceRoot=$src" "/DOutputRoot=$dst" 'config/KTK-Setup.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Setup.exe compilation failed' }
+          $exe = Join-Path $dst "KTK-Qwen-MCP-Setup-$env:VERSION-TEST-UNSIGNED.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Setup.exe not generated' }
+          (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($exe) | Set-Content -Path ($exe + '.sha256')
+          & $exe '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' '/OFFLINE'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Setup offline acceptance failed' }
+          if ((Get-Service KTKQwenMCP,KTKQwenTunnel -ErrorAction SilentlyContinue).Count -gt 0) { throw 'Installer left test services behind' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-installer
+          path: |
+            candidate/setup/KTK-Qwen-MCP-Setup-${{ needs.verify-package.outputs.version }}-TEST-UNSIGNED.exe
+            candidate/setup/KTK-Qwen-MCP-Setup-${{ needs.verify-package.outputs.version }}-TEST-UNSIGNED.exe.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: [verify-package, verify-windows-setup]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-release-outer
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-release-installer
+          path: release
+      - name: Verify outer SHA-256 and publish immutable GitHub prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify-package.outputs.version }}
+        run: |
+          cd release
+          sha256sum --check "KTK-Update-${VERSION}.zip.sha256"
+          if gh release view "ktk-update-v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'Release tag already exists; refuse overwrite' >&2
+            exit 1
+          fi
+          gh release create "ktk-update-v${VERSION}" "KTK-Update-${VERSION}.zip" "KTK-Update-${VERSION}.zip.sha256" "KTK-Qwen-MCP-Setup-${VERSION}-TEST-UNSIGNED.exe" "KTK-Qwen-MCP-Setup-${VERSION}-TEST-UNSIGNED.exe.sha256" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "KTK Qwen Windows ${VERSION} (verified unsigned candidate)" --notes "Automated GitHub-hosted Windows checks passed. Setup.exe is unsigned. Live model/GPU and owner Windows acceptance remain required. Do not use as unattended production update until approved in Cloudflare release catalog." --prerelease
+          gh release view "ktk-update-v${VERSION}" --repo "$GITHUB_REPOSITORY" --json url,assets
