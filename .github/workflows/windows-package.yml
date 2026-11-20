@@ -81,6 +81,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 8
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: KTK-Windows-MCP-step21-${{ github.run_number }}
