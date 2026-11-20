@@ -415,7 +415,8 @@ test("strict refresh rotation and revocation invalidate issued access tokens", a
 test("scope gate blocks file reads, mutations, unknown methods, batches and route/header bypasses", async t => {
   const f = await fixture(t);
   const login = await f.login();
-  for (const name of ["file_read", "powershell", "reboot", "file_write", "unknown", "__proto__", "constructor"]) assert.equal((await f.mcp(login.access_token, "tools/call", { name })).status, 403, name);
+  for (const name of ["file_read", "powershell", "reboot", "file_write", "service_start", "service_stop", "configure_recovery", "unknown", "__proto__", "constructor"]) assert.equal((await f.mcp(login.access_token, "tools/call", { name })).status, 403, name);
+  assert.equal((await f.mcp(login.access_token, "tools/call", { name: "admin_status", arguments: {} })).status, 200);
   assert.equal((await f.mcp(login.access_token, "resources/read")).status, 403);
   assert.equal((await f.send("/mcp/tools/call", { headers: { authorization: "Bearer " + login.access_token } })).status, 404);
   assert.equal((await f.mcp(login.access_token, undefined, undefined, { origin: "https://evil.test" })).status, 403);
@@ -424,7 +425,7 @@ test("scope gate blocks file reads, mutations, unknown methods, batches and rout
   assert.equal((await f.mcp(login.access_token, "tools/call", { name: ["system_info"] })).status, 400);
   assert.equal((await f.send("/mcp?access_token=" + login.access_token)).status, 401);
   assert.equal((await f.send("/mcp", { method: "POST", headers: { authorization: "Bearer " + login.access_token, "content-type": "application/json" }, body: "[]" })).status, 400);
-  assert.equal(f.calls.length, 0);
+  assert.equal(f.calls.length, 1); // The explicitly allowed read-only admin_status call above.
 });
 
 test("tools list is filtered by scopes and explicit file-read consent works", async t => {
@@ -846,7 +847,7 @@ test("step 10: real loopback Windows server interoperates with OAuth gateway and
   assert.deepEqual((await discover.json()).result.supportedVersions, ["2026-07-28", "2025-11-25"]);
   const listed = await f.mcp(access_token, "tools/list", modernParams, { ...modernHeaders, "mcp-method": "tools/list" });
   assert.equal(listed.status, 200, await listed.clone().text());
-  assert.deepEqual((await listed.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status"]);
+  assert.deepEqual((await listed.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status"]);
   const called = await f.mcp(access_token, "tools/call", { ...modernParams, name: "system_info", arguments: {} }, { ...modernHeaders, "mcp-method": "tools/call", "mcp-name": "system_info" });
   assert.equal(called.status, 200, await called.clone().text());
   assert.equal(JSON.parse((await called.json()).result.content[0].text).source, "windows-test-double");
