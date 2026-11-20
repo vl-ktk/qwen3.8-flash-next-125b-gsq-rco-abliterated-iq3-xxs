@@ -7,6 +7,7 @@ import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";
 import { buildSync } from "esbuild";
 import { generateDeviceIdentity, signDeviceAttestation } from "../windows/device-identity.mjs";
 import { createDeviceBootstrapSession, openBootstrapEnvelope } from "../windows/device-bootstrap.mjs";
+import { signedDeviceRevoke, revokeDevice } from "../windows/device-revocation.mjs";
 import { listenWindowsMcp } from "../windows/mcp-server.mjs";
 import { createWindowsToolRegistry } from "../windows/windows-tools.mjs";
 
@@ -707,6 +708,36 @@ test("device pairing demands owner approval, fingerprint and proof of Ed25519 po
   assert.doesNotMatch(JSON.stringify(audit), new RegExp(started.request_id));
   assert.doesNotMatch(JSON.stringify(audit), new RegExp(started.user_code));
   assert.doesNotMatch(JSON.stringify(audit), /private_pkcs8|access_token/);
+});
+
+test("step17 Ed25519 device revocation requires fresh proof, stops MCP and invalidates pending delivery", async t => {
+  const f = await fixture(t, { paired: false });
+  const started = await (await pairStart(f, f.identity)).json();
+  assert.equal((await deviceForm(f, { action: "approve", code: started.user_code, fingerprint: started.fingerprint })).status, 200);
+  const status = () => f.send("/device/pair/status", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request_id: started.request_id }) });
+  const deviceId = (await (await status()).json()).device_id;
+  const sendProof = data => f.send("/device/pair/revoke", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
+  const foreign = await signedDeviceRevoke(await generateDeviceIdentity(), deviceId);
+  assert.equal((await sendProof(foreign)).status, 403);
+  const expired = await signedDeviceRevoke(f.identity, deviceId, { clock: () => Date.now() - 120000 });
+  assert.equal((await sendProof(expired)).status, 400);
+  const approval = await signedDeviceRevoke(f.identity, deviceId);
+  assert.deepEqual(await (await sendProof(approval)).json(), { state: "revoked" });
+  assert.equal((await sendProof(approval)).status, 404);
+  assert.equal((await status()).status, 404);
+  const own = await f.login();
+  assert.deepEqual(await (await f.mcp(own.access_token)).json(), { error: "device_not_paired" });
+  assert.equal(f.calls.length, 0);
+});
+
+test("step17 Windows revoke helper accepts only confirmed Worker response", async t => {
+  const f = await fixture(t, { paired: false });
+  const started = await (await pairStart(f, f.identity)).json();
+  await deviceForm(f, { action: "approve", code: started.user_code, fingerprint: started.fingerprint });
+  const deviceId = (await (await f.send("/device/pair/status", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request_id: started.request_id }) })).json()).device_id;
+  const fetcher = (url, args) => f.send(new URL(url).pathname, args);
+  assert.equal(await revokeDevice(f.identity, deviceId, { fetcher }), true);
+  await assert.rejects(() => revokeDevice(f.identity, deviceId, { fetcher }), /device_revoke_http_404/);
 });
 
 test("pairing management blocks forged origins, CSRF replay and incorrect owner password", async t => {
