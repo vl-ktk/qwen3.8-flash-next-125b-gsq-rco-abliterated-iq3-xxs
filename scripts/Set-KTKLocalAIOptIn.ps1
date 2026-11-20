@@ -27,8 +27,11 @@ if ((Test-Path -LiteralPath $target) -and
 $enabled = [bool]$Enable
 $body = @{schema=1;enabled=$enabled} | ConvertTo-Json -Compress
 $temp = Join-Path $directory ('consent-' + [guid]::NewGuid().ToString('N') + '.tmp')
+$backup = Join-Path $directory ('consent-prev-' + [guid]::NewGuid().ToString('N') + '.bak')
 [IO.File]::WriteAllText($temp, $body, (New-Object System.Text.UTF8Encoding($false)))
-if (Test-Path -LiteralPath $target) { [IO.File]::Replace($temp, $target, $null) }
+# Windows PowerShell 5.1/.NET Framework does not accept null as Replace's
+# backup path. Keep one private GUID-named backup until ACL verification ends.
+if (Test-Path -LiteralPath $target) { [IO.File]::Replace($temp, $target, $backup) }
 else { [IO.File]::Move($temp, $target) }
 # /grant:r only replaces entries for the specified principals; it does NOT
 # remove other explicit grants retained by File.Replace from a legacy file.
@@ -46,4 +49,5 @@ foreach ($ace in $finalAcl.GetAccessRules($true, $true, [Security.Principal.Secu
 # After closing any legacy write access, ensure the protected file contains
 # exactly the owner's intended consent state, not bytes written in a race.
 [IO.File]::WriteAllText($target, $body, (New-Object System.Text.UTF8Encoding($false)))
+if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force -ErrorAction Stop }
 Write-Output $(if ($enabled) { 'KTK local AI future updates approved.' } else { 'KTK local AI future updates disabled.' })

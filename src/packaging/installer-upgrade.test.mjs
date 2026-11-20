@@ -57,6 +57,8 @@ test("untrusted local AI consent never blocks an authorized MCP-only update", ()
   assert.match(unified, /if \(\$doLocalAI\) \{[\s\S]*?KTK_USER_UPDATE_QUEUED/);
   assert.match(unified, /\} else \{\s*Write-Output 'KTK_MCP_UPDATE_ONLY'/);
   assert.match(consent, /icacls\.exe \$target '\/reset'/);
+  assert.match(consent, /\[IO\.File\]::Replace\(\$temp, \$target, \$backup\)/);
+  assert.doesNotMatch(consent, /\[IO\.File\]::Replace\(\$temp, \$target, \$null\)/);
   assert.match(consent, /\$finalAcl = Get-Acl -LiteralPath \$target/);
   assert.match(consent, /\$ace\.IdentityReference\.Value -notin @\('S-1-5-18','S-1-5-32-544'\)/);
   assert.match(windowsCi, /Injected untrusted local AI grant was not removed/);
