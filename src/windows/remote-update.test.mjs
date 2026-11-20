@@ -130,16 +130,31 @@ test("privileged updater runs only its bundled fixed PS script with fixed argume
   const dir = await mkdtemp(path.join(os.tmpdir(), "ktk-updater-run-test-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const calls = [];
-  await applyVerifiedRelease(offer, { updaterRoot: dir, dataRoot: dir,
+  const updated = await applyVerifiedRelease(offer, { updaterRoot: dir, dataRoot: dir,
     download: async () => bytes.length,
-    invoke: async (exe, args, options) => { calls.push({ exe, args, options }); return { stdout: "KTK_USER_UPDATE_QUEUED\n" }; },
+    invoke: async (exe, args, options) => { calls.push({ exe, args, options }); return { stdout: "KTK_MCP_UPDATE_ONLY\n" }; },
   });
+  assert.equal(updated.status, "updated");
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].args.slice(0, 5), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]);
   assert.equal(calls[0].args[5], path.join(dir, "Run-KTKRemoteUpdate.ps1"));
   assert.equal(calls[0].args.at(-2), "-Version");
   assert.equal(calls[0].args.at(-1), offer.version);
   assert.equal(calls[0].options.shell, false);
+});
+
+test("local AI is only queued for a separately opted-in owner", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "ktk-updater-opt-in-test-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const queued = await applyVerifiedRelease(offer, { updaterRoot: dir, dataRoot: dir,
+    download: async () => bytes.length,
+    invoke: async () => ({ stdout: "KTK_USER_UPDATE_QUEUED\n" }),
+  });
+  assert.equal(queued.status, "user_pending");
+  await assert.rejects(applyVerifiedRelease(offer, { updaterRoot: dir, dataRoot: dir,
+    download: async () => bytes.length,
+    invoke: async () => ({ stdout: "unexpected outcome" }),
+  }), /update_completion_unconfirmed/);
 });
 
 test("PowerShell privileged update uses SYSTEM gate and packaged maintenance, never arbitrary scripts", async () => {
@@ -151,6 +166,9 @@ test("PowerShell privileged update uses SYSTEM gate and packaged maintenance, ne
   assert.match(script, /ZipFile\]::OpenRead/);
   assert.match(script, /Apply-KTKUnifiedRelease\.ps1/);
   assert.match(unified, /-Action Update -PackagePath \$PackagePath -Resume -UpdaterApproved/);
+  assert.match(unified, /local-ai-opt-in\.json/);
+  assert.match(unified, /if \(\$doLocalAI\) \{/);
+  assert.match(unified, /KTK_MCP_UPDATE_ONLY/);
   assert.match(unified, /KTKQwenUserUpdater/);
   assert.match(maintenance, /updater_approval_requires_localsystem_live_update/);
   assert.match(installer, /KTKQwenUpdater\.exe/);

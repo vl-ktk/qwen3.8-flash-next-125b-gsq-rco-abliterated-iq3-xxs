@@ -87,6 +87,8 @@ jobs:
           Expand-Archive -LiteralPath "candidate/KTK-Windows-MCP-$env:VERSION-win-x64.zip" -DestinationPath 'candidate/extracted'
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Install-KTKUserUpdater.ps1' -CheckOnly
           if ($LASTEXITCODE -ne 0) { throw 'User updater payload invalid' }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Set-KTKLocalAIOptIn.ps1' -CheckOnly
+          if ($LASTEXITCODE -ne 0) { throw 'Local AI opt-in payload invalid' }
           $compiler = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $compiler) { choco install innosetup --no-progress -y; $compiler = (Get-Command ISCC.exe -ErrorAction Stop).Source }
           New-Item -ItemType Directory -Path 'candidate/setup' -Force | Out-Null

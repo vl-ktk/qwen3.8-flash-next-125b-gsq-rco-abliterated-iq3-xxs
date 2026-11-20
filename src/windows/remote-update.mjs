@@ -110,8 +110,11 @@ export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, downl
       shell: false, windowsHide: true, timeout: 300000, maxBuffer: 16384,
       env: { SystemRoot: process.env.SystemRoot ?? "C:\\Windows", ProgramFiles: process.env.ProgramFiles ?? "C:\\Program Files", ProgramData: process.env.ProgramData ?? "C:\\ProgramData" },
     });
-    if (typeof result?.stdout !== "string" || !result.stdout.includes("KTK_USER_UPDATE_QUEUED")) fail("user_update_not_queued");
-    return { status: "user_pending", version: offer.version };
+    const output = result?.stdout;
+    const aiQueued = typeof output === "string" && output.includes("KTK_USER_UPDATE_QUEUED");
+    const mcpOnly = typeof output === "string" && output.includes("KTK_MCP_UPDATE_ONLY");
+    if (aiQueued === mcpOnly) fail("update_completion_unconfirmed");
+    return { status: aiQueued ? "user_pending" : "updated", version: offer.version };
   } finally {
     // Only this invocation's newly-created private staging folder is removed.
     await rm(temp, { recursive: true, force: true });
