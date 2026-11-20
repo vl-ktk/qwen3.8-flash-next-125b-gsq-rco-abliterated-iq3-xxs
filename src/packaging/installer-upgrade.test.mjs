@@ -12,6 +12,8 @@ test("integrated live installer updates enrolled MCP, then runs AI under origina
   assert.match(setup, /Mode = '-Live'[\s\S]*?Run-KTKIntegratedAcceptance\.ps1/);
   assert.match(setup, /ExecAsOriginalUser\(UserPowerShell[\s\S]*?ewWaitUntilTerminated/);
   assert.match(setup, /Show-KTKLocalAI\.ps1/);
+  assert.match(setup, /Install-KTKUserUpdater\.ps1/);
+  assert.match(setup, /ExecAsOriginalUser\(UserPowerShell[\s\S]*?Local AI installation incomplete/);
   assert.match(integrated, /state\\enrollment\.json/);
   assert.match(integrated, /Maintain-KTKMCP\.ps1/);
   assert.match(integrated, /-Action Update -PackagePath \$source -Resume -InstallerApproved/);
@@ -32,4 +34,13 @@ test("one-click approval cannot enable unrelated maintenance operations", () => 
 
 test("Windows recovery gate accepts the current packaged installer version", () => {
   assert.ok(staged.includes(`'${packageLock.package_version}'`));
+});
+
+test("one-time user task runs only in the original non-elevated login without passwords", () => {
+  const script = readFileSync(new URL("../../scripts/Install-KTKUserUpdater.ps1", import.meta.url), "utf8");
+  assert.match(script, /S-1-5-18/);
+  assert.match(script, /Principal\.RunLevel = 0/);
+  assert.match(script, /Principal\.LogonType = 3/);
+  assert.match(script, /RegisterTaskDefinition\(\$taskName,\$definition,6,\$sid,\$null,3\)/);
+  assert.doesNotMatch(script, /-Verb RunAs|Get-Credential|Read-Host|Invoke-Expression/i);
 });

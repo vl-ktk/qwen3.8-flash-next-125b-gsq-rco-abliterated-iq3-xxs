@@ -10,7 +10,7 @@ import { createOriginVerifier } from "./origin-auth.mjs";
 const MODERN = "2026-07-28";
 const LEGACY = "2025-11-25";
 const SUPPORTED = [MODERN, LEGACY];
-const SERVER_INFO = Object.freeze({ name: "qwen125b-windows-mcp", version: "0.15.0" });
+const SERVER_INFO = Object.freeze({ name: "qwen125b-windows-mcp", version: "0.15.1" });
 const INSTRUCTIONS = "Read-only system tools and a narrowly scoped KTK-only updater. No arbitrary PowerShell, file writes, unrelated process controls or OS reboot. Update packages require a gateway-approved release catalog and checksum.";
 const MAX_BODY = 64 * 1024;
 const SESSION_TTL = 24 * 60 * 60 * 1000;

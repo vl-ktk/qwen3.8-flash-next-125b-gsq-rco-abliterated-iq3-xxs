@@ -12,7 +12,7 @@ export const TOOL_SCOPES = Object.freeze({
   admin_status: "qwen:read",
   pc_preflight: "qwen:read", storage_check: "qwen:read",
   runtime_check: "qwen:read", installation_plan: "qwen:read",
-  update_status: "qwen:read", update_apply: "qwen:update",
+  update_status: "qwen:read", update_apply: "qwen:update", update_resume: "qwen:update",
 });
 const VERSION = /^0\.18\.[1-9]\d{0,3}$/;
 const DIGEST = /^[a-f0-9]{64}$/;

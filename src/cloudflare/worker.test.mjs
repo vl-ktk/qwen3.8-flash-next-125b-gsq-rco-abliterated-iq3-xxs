@@ -173,6 +173,7 @@ test("KTK update requires dedicated OAuth scope and gateway-owned release metada
   const read = await f.login();
   const params = { name: "update_apply", arguments: { version: "0.18.6" } };
   assert.equal((await f.mcp(read.access_token, "tools/call", params)).status, 403);
+  assert.equal((await f.mcp(read.access_token, "tools/call", { name: "update_resume", arguments: {} })).status, 403);
   const owner = await f.login({ scope: "qwen:read qwen:update" });
   const unsupported = await f.mcp(owner.access_token, "tools/call", { name: "update_apply", arguments: { version: "0.18.7" } });
   assert.equal(unsupported.status, 409);
@@ -183,6 +184,9 @@ test("KTK update requires dedicated OAuth scope and gateway-owned release metada
   assert.equal(f.calls.length, 1);
   const forwarded = JSON.parse(f.calls[0].body);
   assert.deepEqual(forwarded.params.arguments, { version: "0.18.6", ...release });
+  const retry = await f.mcp(owner.access_token, "tools/call", { name: "update_resume", arguments: {} });
+  assert.equal(retry.status, 200);
+  assert.equal(JSON.parse(f.calls[1].body).params.name, "update_resume");
 });
 
 test("origin shared key is required before device attestation and MCP forwarding", async t => {

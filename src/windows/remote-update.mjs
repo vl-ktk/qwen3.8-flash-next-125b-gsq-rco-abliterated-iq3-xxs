@@ -46,11 +46,11 @@ export function signUpdateRequest(keyText, method, route, body = "", now = Date.
 }
 
 export async function callLocalUpdater(action, offer, { keyText, fetcher = fetch, port = 18765 } = {}) {
-  if (action !== "update" && action !== "status") fail("unknown_update_action");
+  if (!["update", "status", "resume"].includes(action)) fail("unknown_update_action");
   if (typeof keyText !== "string") fail("updater_not_configured");
-  const route = action === "update" ? "/v1/update" : "/v1/status";
+  const route = action === "update" ? "/v1/update" : action === "resume" ? "/v1/resume" : "/v1/status";
   const body = action === "update" ? JSON.stringify(validateUpdateOffer(offer)) : "";
-  const method = action === "update" ? "POST" : "GET";
+  const method = action === "status" ? "GET" : "POST";
   const response = await fetcher(`http://127.0.0.1:${port}${route}`, {
     method, redirect: "error", body: body || undefined,
     headers: signUpdateRequest(keyText, method, route, body), signal: AbortSignal.timeout(4500),
@@ -103,12 +103,13 @@ export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, downl
   try {
     await download(offer, bundle);
     const native = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    await invoke(native, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+    const result = await invoke(native, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
       path.join(updaterRoot, "Run-KTKRemoteUpdate.ps1"), "-ArtifactPath", bundle, "-Version", offer.version], {
       shell: false, windowsHide: true, timeout: 300000, maxBuffer: 16384,
       env: { SystemRoot: process.env.SystemRoot ?? "C:\\Windows", ProgramFiles: process.env.ProgramFiles ?? "C:\\Program Files", ProgramData: process.env.ProgramData ?? "C:\\ProgramData" },
     });
-    return { status: "updated", version: offer.version };
+    if (typeof result?.stdout !== "string" || !result.stdout.includes("KTK_USER_UPDATE_QUEUED")) fail("user_update_not_queued");
+    return { status: "user_pending", version: offer.version };
   } finally {
     // Only this invocation's newly-created private staging folder is removed.
     await rm(temp, { recursive: true, force: true });
@@ -116,7 +117,8 @@ export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, downl
 }
 
 export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1", apply = applyVerifiedRelease,
-  updaterRoot, dataRoot, statusFile = path.join(dataRoot, "status.json"), initialStatus = { status: "idle" } } = {}) {
+  updaterRoot, dataRoot, statusFile = path.join(dataRoot, "status.json"), initialStatus = { status: "idle" },
+  checkUser = async () => null, resumeUser = async () => ({ status: "waiting_for_login" }) } = {}) {
   if (host !== "127.0.0.1" || !Number.isInteger(port) || port < 0 || port > 65535) fail("invalid_updater_bind");
   const verify = createOriginVerifier(keyText);
   let state = initialStatus;
@@ -125,27 +127,77 @@ export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1",
     const reply = (code, data) => { res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(data)); };
     try {
       if (req.headers.host !== `127.0.0.1:${server.address().port}` || req.headers.origin) return reply(403, { error: "forbidden" });
-      if (req.url !== "/v1/update" && req.url !== "/v1/status") return reply(404, { error: "not_found" });
-      const method = req.url === "/v1/update" ? "POST" : "GET";
+      if (!["/v1/update", "/v1/status", "/v1/resume"].includes(req.url)) return reply(404, { error: "not_found" });
+      const method = req.url === "/v1/status" ? "GET" : "POST";
       if (req.method !== method) return reply(405, { error: "method_not_allowed" });
       let size = 0;
       const parts = [];
       for await (const chunk of req) { size += chunk.length; if (size > MAX_REQUEST) return reply(413, { error: "too_large" }); parts.push(chunk); }
       const raw = Buffer.concat(parts);
       if (!verify(req.headers, method, req.url, raw)) return reply(403, { error: "denied" });
-      if (method === "GET") return reply(200, state);
+      if (method === "GET") {
+        if (state.status === "user_pending") {
+          const user = await checkUser().catch(() => null);
+          if (user && Date.parse(user.last_run) >= Date.parse(state.started_at ?? state.at) - 5000) {
+            if (user.state === "Running") return reply(200, { ...state, user_phase: "running" });
+            if (user.state === "Ready" && user.last_result === 0) await report({ status: "updated", version: state.version });
+            else if (user.state === "Ready" && Number.isInteger(user.last_result)) await report({ status: "user_failed", version: state.version, code: "local_ai_update_failed" });
+          }
+        }
+        return reply(200, state);
+      }
+      if (req.url === "/v1/resume") {
+        if (raw.length || !["user_pending", "user_failed"].includes(state.status)) return reply(409, { error: "no_user_phase_to_resume" });
+        const outcome = await resumeUser();
+        await report({ status: "user_pending", version: state.version, started_at: new Date().toISOString() });
+        return reply(202, { status: outcome?.status === "queued" ? "queued" : "waiting_for_login", version: state.version });
+      }
       if (state.status === "running") return reply(409, { error: "update_running" });
       const offer = validateUpdateOffer(JSON.parse(raw.toString("utf8")));
       // Response first: the updater might restart the caller MCP service.
       await report({ status: "running", version: offer.version });
+      const startedAt = state.at;
       reply(202, { status: "accepted", version: offer.version });
       Promise.resolve().then(() => apply(offer, { updaterRoot, dataRoot })).then(
-        () => report({ status: "updated", version: offer.version }),
+        result => report({ status: result?.status === "user_pending" ? "user_pending" : "updated", version: offer.version, started_at: startedAt }),
         error => report({ status: "failed", version: offer.version, code: typeof error?.code === "string" ? error.code : "update_failed" }),
       ).catch(() => { state = { status: "failed", code: "status_unavailable" }; });
     } catch { if (!res.writableEnded) reply(400, { error: "invalid_request" }); }
   });
   return server;
+}
+
+// Only the fixed, password-free Task Scheduler action may run as the current
+// interactive user. SYSTEM never accepts a user account or command from MCP.
+export async function runFixedUserTask({ invoke = exec, read = readFile, write = writeFile,
+  programData = process.env.ProgramData ?? "C:\\ProgramData" } = {}) {
+  const jobPath = path.win32.join(programData, "KTK", "Updater", "public", "job.json");
+  let job;
+  try { job = JSON.parse(await read(jobPath, "utf8")); }
+  catch { fail("user_update_job_unavailable"); }
+  if (!job || job.schema !== 1 || !VERSION.test(job.version ?? "") || !DIGEST.test(job.manifest_sha256 ?? "") ||
+      typeof job.attempt !== "string" || !/^[a-f0-9]{32}$/.test(job.attempt)) fail("user_update_job_invalid");
+  job.attempt = randomBytes(16).toString("hex");
+  await write(jobPath, JSON.stringify(job), { mode: 0o600 });
+  const native = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "schtasks.exe");
+  try {
+    await invoke(native, ["/run", "/tn", "KTKQwenUserUpdater"], {
+      shell: false, windowsHide: true, timeout: 15000, maxBuffer: 8192,
+    });
+    return { status: "queued" };
+  } catch { return { status: "waiting_for_login" }; }
+}
+
+export async function inspectFixedUserTask({ invoke = exec } = {}) {
+  const native = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const script = "$t=Get-ScheduledTask -TaskName 'KTKQwenUserUpdater' -ErrorAction Stop; $i=Get-ScheduledTaskInfo -TaskName 'KTKQwenUserUpdater' -ErrorAction Stop; @{state=[string]$t.State;last_result=[int64]$i.LastTaskResult;last_run=$i.LastRunTime.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress";
+  try {
+    const { stdout } = await invoke(native, ["-NoProfile", "-NonInteractive", "-Command", script], {
+      shell: false, windowsHide: true, timeout: 15000, maxBuffer: 8192,
+    });
+    const result = JSON.parse(stdout);
+    return typeof result?.state === "string" && typeof result?.last_run === "string" && Number.isInteger(result?.last_result) ? result : null;
+  } catch { return null; }
 }
 
 export async function runUpdaterService() {
@@ -156,10 +208,11 @@ export async function runUpdaterService() {
   const keyText = (await readFile(path.win32.join(process.env.ProgramData ?? "C:\\ProgramData", "KTK", "QwenMCP", "secrets", "gateway.key"), "utf8")).trim();
   let initialStatus;
   try { initialStatus = JSON.parse(await readFile(path.win32.join(dataRoot, "status.json"), "utf8")); } catch { initialStatus = { status: "idle" }; }
-  if (!initialStatus || typeof initialStatus !== "object" || !["idle", "failed", "updated"].includes(initialStatus.status)) {
+  if (!initialStatus || typeof initialStatus !== "object" || !["idle", "failed", "updated", "user_pending", "user_failed"].includes(initialStatus.status)) {
     initialStatus = { status: "failed", code: "updater_interrupted" };
   }
-  const server = createUpdaterServer({ keyText, updaterRoot, dataRoot, initialStatus });
+  const server = createUpdaterServer({ keyText, updaterRoot, dataRoot, initialStatus,
+    checkUser: inspectFixedUserTask, resumeUser: runFixedUserTask });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(18765, "127.0.0.1", resolve); });
   process.stdout.write("KTK update service ready on loopback\n");
 }

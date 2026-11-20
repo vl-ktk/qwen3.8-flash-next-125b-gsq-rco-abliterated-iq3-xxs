@@ -11,7 +11,7 @@
 [Setup]
 AppId={{F087E1C8-6597-4DE8-960B-38D903A6E3BE}
 AppName=KTK Qwen MCP (Acceptance Candidate)
-AppVersion=0.18.6
+AppVersion=0.18.7
 AppPublisher=KTK
 DefaultDirName={autopf}\KTK\QwenMCP
 CreateAppDir=no
@@ -25,7 +25,7 @@ DisableProgramGroupPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=no
 OutputDir={#OutputRoot}
-OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.6-TEST-UNSIGNED
+OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.7-TEST-UNSIGNED
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
@@ -89,6 +89,7 @@ var
   LocalAI: String;
   UserPowerShell: String;
   Updater: String;
+  UserUpdater: String;
 begin
   if CurStep <> ssPostInstall then Exit;
   { Inno Setup 6 is a 32-bit installer: Sysnative resolves to native System32. }
@@ -115,8 +116,16 @@ begin
     if not ExecAndLogOutput(PowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode, @KTKLog) then
       RaiseException('Could not install KTK updater; Windows error ' + IntToStr(ExitCode));
     if ExitCode <> 0 then RaiseException('KTK updater setup incomplete; retry this installer.');
+    UserUpdater := ExpandConstant('{tmp}\KTKPayload\Install-KTKUserUpdater.ps1');
+    { ExecAsOriginalUser still launches from this 32-bit Inno process: use
+      Sysnative so user task registration runs in native x64 PowerShell. }
+    UserPowerShell := PowerShell;
+    Args := '-NoProfile -ExecutionPolicy Bypass -File "' + UserUpdater + '" -Live';
+    WizardForm.StatusLabel.Caption := 'Настройка обновлений Strata и локальной модели...';
+    if not ExecAsOriginalUser(UserPowerShell, Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+      RaiseException('Could not register non-elevated KTK user updater; run Setup from the normal Windows desktop.');
+    if ExitCode <> 0 then RaiseException('KTK user updater setup incomplete; retry this installer.');
     LocalAI := ExpandConstant('{tmp}\KTKPayload\Show-KTKLocalAI.ps1');
-    UserPowerShell := ExpandConstant('{win}\System32\WindowsPowerShell\v1.0\powershell.exe');
     Args := '-NoProfile -ExecutionPolicy Bypass -File "' + LocalAI + '"';
     WizardForm.StatusLabel.Caption := 'Установка Strata и Qwen 125B для текущего пользователя...';
     { B/C/D may NEVER be run elevated as Administrator or as LocalService. }

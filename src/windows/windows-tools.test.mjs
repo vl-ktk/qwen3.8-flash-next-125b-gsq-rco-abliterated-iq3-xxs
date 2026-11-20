@@ -21,6 +21,21 @@ test("read-only allowlist has stable schemas; no arbitrary command, script, writ
   assert.equal(tools.list()[0].name, "system_info");
 });
 
+test("configured gateway exposes only pinned update operations, never arbitrary commands", async () => {
+  const calls = [];
+  const registry = createWindowsToolRegistry({ updaterKey: "test-key", updater: async (action, args) => {
+    calls.push({ action, args }); return { status: "ok" };
+  } });
+  assert.equal(registry.has("update_status"), true);
+  assert.equal(registry.has("update_apply"), true);
+  assert.equal(registry.has("update_resume"), true);
+  assert.deepEqual(await registry.call("update_resume", {}), { status: "ok" });
+  assert.deepEqual(await registry.call("update_status", {}), { status: "ok" });
+  assert.deepEqual(calls.map(call => call.action), ["resume", "status"]);
+  await assert.rejects(() => registry.call("update_resume", { command: "cmd.exe" }), /invalid_arguments/);
+  await assert.rejects(() => registry.call("update_apply", { version: "0.18.7" }), /invalid_update_offer/);
+});
+
 test("all PowerShell tool arguments are validated and mapped to static query kinds", async () => {
   const calls = [];
   const tools = createWindowsToolRegistry({ runWindowsQuery: async (name, args) => { calls.push({ name, args }); return { ok: true }; } });
