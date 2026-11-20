@@ -57,6 +57,11 @@ jobs:
           assert.equal(pairingPage.response.status, 200);
           assert.match(pairingPage.response.headers.get('content-security-policy') ?? '', /script-src 'nonce-[A-Za-z0-9_-]{32}'/);
           assert.match(pairingPage.body, /history\.replaceState\(null, "", location\.pathname\)/);
+          assert.match(pairingPage.body, /Подключить компьютер к Qwen\?/);
+          assert.match(pairingPage.body, /type="hidden" name="code"/);
+          assert.match(pairingPage.body, /type="hidden" name="fingerprint"/);
+          assert.match(pairingPage.body, /id="pair-approve" name="action" value="approve" disabled/);
+          assert.doesNotMatch(pairingPage.body, /Код \(10 символов\)|Отпечаток ключа \(16 символов\)/);
           assert.doesNotMatch(pairingPage.body, /QWEN_MCP_GATEWAY_KEY|QWEN_TUNNEL_TOKEN/);
 
           console.log('Live public HTTP/OAuth/pairing-page smoke PASS. Tunnel and Windows MCP NOT tested.');
