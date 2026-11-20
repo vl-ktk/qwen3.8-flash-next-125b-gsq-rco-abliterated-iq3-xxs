@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes, createHash, createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readFile, mkdir, mkdtemp } from "node:fs/promises";
 import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";
@@ -20,8 +20,9 @@ const redirect = "https://chatgpt.com/connector_platform_oauth_redirect";
 const password = randomBytes(32).toString("hex");
 const verifier = randomBytes(32).toString("base64url");
 const codeChallenge = createHash("sha256").update(verifier).digest("base64url");
+const gatewayKey = randomBytes(32).toString("base64url");
 
-async function fixture(t, { configured = true, state = true, upstream, originBackend, ownerPassword = password, persistPath, paired = true, attestation = "valid", deviceIdentity, deviceIdOverride } = {}) {
+async function fixture(t, { configured = true, gatewayConfigured = true, state = true, upstream, originBackend, ownerPassword = password, persistPath, paired = true, attestation = "valid", deviceIdentity, deviceIdOverride } = {}) {
   const calls = [];
   const identity = deviceIdentity ?? await generateDeviceIdentity();
   const deviceId = deviceIdOverride ?? randomBytes(24).toString("base64url");
@@ -32,7 +33,7 @@ async function fixture(t, { configured = true, state = true, upstream, originBac
     compatibilityDate: "2026-11-17", compatibilityFlags: ["global_fetch_strictly_public"], log: new Log(LogLevel.ERROR),
     outboundService: () => { throw Error("External network forbidden in tests"); },
     durableObjects: state ? { QWEN_OAUTH_STATE: { className: "TestOAuthState", useSQLite: true } } : {},
-    bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: ownerPassword, QWEN_OAUTH_GENERATION: "1" } : {},
+    bindings: configured ? { QWEN_OAUTH_OWNER_PASSWORD: ownerPassword, QWEN_OAUTH_GENERATION: "1", ...(gatewayConfigured ? { QWEN_MCP_GATEWAY_KEY: gatewayKey } : {}) } : {},
     serviceBindings: { QWEN_MCP_ORIGIN: async request => {
       if (originBackend) return originBackend(request);
       if (new URL(request.url).pathname === "/device/attest") {
@@ -148,6 +149,21 @@ test("positive code + PKCE flow forwards only to fixed VPC destination and strip
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0].url, "http://127.0.0.1:8765/mcp");
   for (const key of ["authorization", "cookie", "x-qwen-user", "x-forwarded-host", "cf-access-jwt-assertion"]) assert.equal(f.calls[0].headers[key], undefined);
+  assert.match(f.calls[0].headers["x-qwen-origin-nonce"], /^[A-Za-z0-9_-]{22}$/);
+  assert.match(f.calls[0].headers["x-qwen-origin-signature"], /^[A-Za-z0-9_-]{43}$/);
+  const forwarded = f.calls[0];
+  const digest = createHash("sha256").update(forwarded.body).digest("hex");
+  const { "x-qwen-origin-timestamp": time, "x-qwen-origin-nonce": nonce, "x-qwen-origin-signature": signature } = forwarded.headers;
+  assert.equal(createHmac("sha256", Buffer.from(gatewayKey, "base64url")).update(`QWEN-ORIGIN-V1\n${time}\n${nonce}\nPOST\n/mcp\n${digest}`).digest("base64url"), signature);
+});
+
+test("origin shared key is required before device attestation and MCP forwarding", async t => {
+  const f = await fixture(t, { gatewayConfigured: false });
+  const login = await f.login();
+  const response = await f.mcp(login.access_token);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "origin_auth_not_configured" });
+  assert.equal(f.calls.length, 0);
 });
 
 test("missing secrets, missing token, forged/foreign/refresh tokens and cookie auth cannot reach VPC", async t => {
@@ -810,7 +826,7 @@ test("step 9: one-time OAuth code cannot replay after Windows outage", async t =
 test("step 10: real loopback Windows server interoperates with OAuth gateway and Ed25519 VPC proof", async t => {
   const identity = await generateDeviceIdentity();
   const deviceId = randomBytes(24).toString("base64url");
-  const server = await listenWindowsMcp({ port: 0, identity, deviceId, toolRegistry: createWindowsToolRegistry({
+  const server = await listenWindowsMcp({ port: 0, identity, deviceId, gatewayKey, toolRegistry: createWindowsToolRegistry({
     runWindowsQuery: async (name, args) => ({ query: name, params: args, source: "windows-test-double" }),
   }) });
   t.after(async () => { if (server.listening) await new Promise(resolve => server.close(resolve)); });
