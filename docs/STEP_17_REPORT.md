@@ -24,7 +24,10 @@
 ## Проверки и Git
 
 - До внесения правок GitHub `main`: `d5dbe44d829b2165605296c77ed87d96a435baad` (источник для отката).
-- Node 24 + Miniflare: **110/110 PASS**, включая два новых интеграционных теста Ed25519 revocation; `npm run check` PASS. Проверка Windows PowerShell 5.1, GitHub PR/CI, Wrangler dry-run и сборка ZIP — результаты фиксируются после запуска.
+- Node 24 + Miniflare: **110/110 PASS**, включая два новых интеграционных теста Ed25519 revocation; `npm run check` PASS; Wrangler `npm run build` dry-run PASS, без выкладки.
+- [PR #25](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/25) **MERGED**, squash `fd9d2882e45f8a155d86e634cb90bb3d7395282f`; непосредственно перед merge `main` повторно сравнили с предыдущим SHA и он был идентичен.
+- [Edge CI #44701963154](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44701963154) **SUCCESS** (`npm ci`, `check`, `test`, `build` dry-run); [Windows CI #44701963164](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44701963164) **SUCCESS** (PowerShell 5.1 parser, реальная загрузка pinned vendors, SHA256/ZIP, Windows `Install -CheckOnly` и `Maintain -CheckOnly`). Никаких Service Control Manager/UAC mutation/job install тестов нет.
+- GitHub artifact: `KTK-Windows-MCP-step17-12`, ID `14613895764`, SHA256 контейнера Actions artifact `0dc315633084d163a69ab43a6e59b091d6afb614d9ee28a4e0d7c5c0c1e35234`, истекает **27.11.2026 08:22 UTC**. ZIP всё ещё содержит `ready_for_installation:false`.
 - Важные новые файлы: `scripts/Maintain-KTKMCP.ps1`, `scripts/Revoke-KTKMCP.mjs`, `src/windows/device-revocation.mjs`, тесты и кандидат пакетировки `0.17.0`.
 
 ## Далее
