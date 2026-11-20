@@ -4,11 +4,17 @@ import { readFileSync } from "node:fs";
 
 const setup = readFileSync(new URL("../../config/KTK-Setup.iss", import.meta.url), "utf8");
 const maintenance = readFileSync(new URL("../../scripts/Maintain-KTKMCP.ps1", import.meta.url), "utf8");
+const integrated = readFileSync(new URL("../../scripts/Run-KTKIntegratedAcceptance.ps1", import.meta.url), "utf8");
 
-test("live installer upgrades only an enrolled existing installation", () => {
-  assert.match(setup, /Mode = '-Live'[\s\S]*?QwenMCP\\MANIFEST\.json[\s\S]*?state\\enrollment\.json/);
-  assert.match(setup, /Maintain-KTKMCP\.ps1/);
-  assert.match(setup, /-Action Update -PackagePath[\s\S]*?-Resume -InstallerApproved/);
+test("integrated live installer updates enrolled MCP, then runs AI under original user", () => {
+  assert.match(setup, /Mode = '-Live'[\s\S]*?Run-KTKIntegratedAcceptance\.ps1/);
+  assert.match(setup, /ExecAsOriginalUser\(UserPowerShell[\s\S]*?ewWaitUntilTerminated/);
+  assert.match(setup, /Show-KTKLocalAI\.ps1/);
+  assert.match(integrated, /state\\enrollment\.json/);
+  assert.match(integrated, /Maintain-KTKMCP\.ps1/);
+  assert.match(integrated, /-Action Update -PackagePath \$source -Resume -InstallerApproved/);
+  assert.match(integrated, /if \(\[version\]\$current\.package_version -eq \[version\]\$candidate\.package_version\)/);
+  assert.match(integrated, /Verify-KTKPackage\.ps1/);
   assert.match(setup, /Run-KTKAcceptance\.ps1/);
   assert.match(setup, /Mode := '-Offline'/);
 });
