@@ -5,7 +5,7 @@ import { validateTransportPublicKey, bootstrapSecretsReady, sealBootstrapEnvelop
 
 // This is the cloud half of Windows device enrollment, not a replacement for
 // user OAuth. No device private key or long-lived device credential is stored.
-export const DEVICE_PATHS = new Set(["/device/pair/start", "/device/pair/status", "/device/pair/manage"]);
+export const DEVICE_PATHS = new Set(["/device/pair/start", "/device/pair/status", "/device/pair/manage", "/device/pair/revoke"]);
 const TTL = 600;
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const encoder = new TextEncoder();
@@ -74,6 +74,26 @@ export async function devicePairRoute(request, env, storage) {
       return json(200, { state: "approved", device_id: pending.device_id });
     });
   }
+  if (path === "/device/pair/revoke" && request.method === "POST") {
+    const body = await parseJson(request);
+    if (!body || Object.keys(body).sort().join(",") !== "device_id,nonce,signature,timestamp"
+      || !validId(body.device_id) || !/^[A-Za-z0-9_-]{22}$/.test(body.nonce ?? "")
+      || !/^[A-Za-z0-9_-]{86}$/.test(body.signature ?? "") || !/^\d{10}$/.test(body.timestamp ?? "")
+      || Math.abs(Math.floor(Date.now() / 1000) - Number(body.timestamp)) > 60) return json(400, { error: "invalid_request" });
+    return storage.transaction(async tx => {
+      const kv = new OAuthStorage(tx);
+      const active = await kv.get("device:active", "json");
+      if (!active || active.device_id !== body.device_id) return json(404, { error: "device_not_found" });
+      const message = encoder.encode(`QWEN-MCP-REVOKE-V1\n${ISSUER}\n${body.device_id}\n${body.nonce}\n${body.timestamp}`);
+      try {
+        const key = await crypto.subtle.importKey("raw", decode64(active.public_key), "Ed25519", false, ["verify"]);
+        if (!await crypto.subtle.verify("Ed25519", key, decode64(body.signature), message)) return json(403, { error: "invalid_device_proof" });
+      } catch { return json(403, { error: "invalid_device_proof" }); }
+      await kv.delete("device:active");
+      if (active.request_hash) await kv.delete(`device:pending:${active.request_hash}`);
+      return json(200, { state: "revoked" });
+    });
+  }
   if (path === "/device/pair/manage" && request.method === "GET") {
     const proof = base64url(random(32));
     await storage.transaction(async tx => new OAuthStorage(tx).put(`device:csrf:${await hash(proof)}`, "1", { expirationTtl: TTL }));
@@ -107,6 +127,7 @@ export async function devicePairRoute(request, env, storage) {
         const active = await kv.get("device:active", "json");
         if (!active || active.device_id !== id) return json(404, { error: "device_not_found" });
         await kv.delete("device:active");
+        if (active.request_hash) await kv.delete(`device:pending:${active.request_hash}`);
         return html("<h1>Доступ устройства отозван</h1>");
       }
       if (form.get("action") !== "approve") return json(400, { error: "invalid_request" });
@@ -125,7 +146,7 @@ export async function devicePairRoute(request, env, storage) {
         if (!bootstrapSecretsReady(env)) return json(503, { error: "bootstrap_not_configured" });
         pending.bootstrap_envelope = await sealBootstrapEnvelope(env, { publicKey: pending.bootstrap_public_key, requestId: pending.request_id, deviceId });
       }
-      await kv.put("device:active", JSON.stringify({ device_id: deviceId, public_key: pending.public_key, label: pending.label }));
+      await kv.put("device:active", JSON.stringify({ device_id: deviceId, public_key: pending.public_key, label: pending.label, request_hash: requestHash }));
       pending.device_id = deviceId;
       pending.state = "approved";
       await kv.put(pendingKey, JSON.stringify(pending), { expirationTtl: TTL });
