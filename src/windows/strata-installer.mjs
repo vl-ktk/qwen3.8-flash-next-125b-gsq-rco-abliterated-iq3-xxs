@@ -24,6 +24,7 @@ export function validateStrataRelease(config = lock) {
 // existing Strata desktop/terminal directory or the MCP LocalService profile.
 export function strataInstallRoot(localAppData = process.env.LOCALAPPDATA) {
   if (typeof localAppData !== "string" || !path.win32.isAbsolute(localAppData) || !/^[a-z]:\\[^\\/]/i.test(localAppData)) fail("invalid_local_user_profile");
+  if (/\\windows\\(?:serviceprofiles\\|system32\\config\\systemprofile(?:\\|$))/i.test(localAppData)) fail("strata_interactive_user_required");
   return path.win32.join(localAppData, "KTK", "Strata");
 }
 
