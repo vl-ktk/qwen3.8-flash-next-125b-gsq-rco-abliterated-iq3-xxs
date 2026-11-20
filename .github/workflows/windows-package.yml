@@ -195,13 +195,21 @@ jobs:
               Start-Sleep -Seconds 1
             }
             if ($LASTEXITCODE -ne 0) { throw 'Updater loopback HMAC health check failed' }
+            # Exercise the previously missing upgrade path against the real
+            # running SYSTEM service (the old installer was a no-op here).
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Install-KTKUpdater.ps1' -Live
+            if ($LASTEXITCODE -ne 0) { throw 'Existing SYSTEM updater self-replacement failed' }
+            $previous = Join-Path $env:ProgramFiles 'KTK\Updater.previous'
+            if (-not (Test-Path -LiteralPath (Join-Path $previous 'runtime\remote-update.mjs') -PathType Leaf)) { throw 'Updater rollback was not preserved' }
+            & 'candidate/extracted/bin/node.exe' $smoke
+            if ($LASTEXITCODE -ne 0) { throw 'Upgraded SYSTEM updater HMAC status failed' }
           } finally {
             if (Get-Service KTKQwenUpdater -ErrorAction SilentlyContinue) {
               Stop-Service KTKQwenUpdater -ErrorAction SilentlyContinue
               try { (Get-Service KTKQwenUpdater).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(20)) } catch { }
               & (Join-Path $root 'KTKQwenUpdater.exe') uninstall | Out-Null
             }
-            foreach ($target in @($root,$data,(Join-Path $env:ProgramData 'KTK\QwenMCP'))) {
+            foreach ($target in @($root,(Join-Path $env:ProgramFiles 'KTK\Updater.previous'),$data,(Join-Path $env:ProgramData 'KTK\QwenMCP'))) {
               if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue }
             }
           }
