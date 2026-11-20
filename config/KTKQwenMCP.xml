@@ -1,0 +1,16 @@
+<service>
+  <id>KTKQwenMCP</id>
+  <name>KTK Qwen MCP</name>
+  <description>Local-only, owner-authorized read-only Qwen MCP origin.</description>
+  <executable>%BASE%\bin\node.exe</executable>
+  <arguments>"%BASE%\runtime\main.mjs"</arguments>
+  <workingdirectory>%BASE%\runtime</workingdirectory>
+  <startmode>Manual</startmode>
+  <serviceaccount><domain>NT AUTHORITY</domain><user>LocalService</user></serviceaccount>
+  <env name="QWEN_MCP_GATEWAY_KEY_PATH" value="%PROGRAMDATA%\KTK\QwenMCP\secrets\gateway.key"/>
+  <env name="QWEN_MCP_EMERGENCY_LOCK_PATH" value="%PROGRAMDATA%\KTK\QwenMCP\state\emergency.lock"/>
+  <env name="QWEN_DEVICE_IDENTITY_PATH" value="%PROGRAMDATA%\KTK\QwenMCP\secrets\device-identity.json"/>
+  <env name="QWEN_MCP_PORT" value="8765"/>
+  <logpath>%PROGRAMDATA%\KTK\QwenMCP\logs</logpath>
+  <log mode="roll"/>
+</service>

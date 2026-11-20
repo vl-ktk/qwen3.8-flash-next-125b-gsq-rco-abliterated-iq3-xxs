@@ -25,14 +25,15 @@ export async function sha256File(file) {
 }
 
 export function validatePackageLock(lock) {
-  if (lock?.schema !== 1 || !/^0\.15\.\d+$/.test(lock.package_version ?? "") || lock.platform !== "win32" || lock.architecture !== "x64" || !Array.isArray(lock.artifacts) || !Array.isArray(lock.licenses)) throw Error("invalid_package_lock");
-  if (lock.artifacts.length !== 2 || lock.licenses.length !== 2) throw Error("invalid_package_lock");
-  if (lock.artifacts.map(x => x.id).join(",") !== "node,cloudflared") throw Error("invalid_package_lock");
+  if (lock?.schema !== 1 || !/^0\.16\.\d+$/.test(lock.package_version ?? "") || lock.platform !== "win32" || lock.architecture !== "x64" || !Array.isArray(lock.artifacts) || !Array.isArray(lock.licenses)) throw Error("invalid_package_lock");
+  if (lock.artifacts.length !== 3 || lock.licenses.length !== 3) throw Error("invalid_package_lock");
+  if (lock.artifacts.map(x => x.id).join(",") !== "node,cloudflared,winsw") throw Error("invalid_package_lock");
   for (const artifact of lock.artifacts) {
     if (!safeFile(artifact.file) || !safePath(artifact.archive_path) || !artifact.archive_path.startsWith("bin/") || !HASH.test(artifact.sha256)) throw Error("invalid_package_lock");
     const u = new URL(artifact.url);
     if (artifact.id === "node" && (u.origin !== "https://nodejs.org" || !u.pathname.endsWith(`/v${artifact.version}/win-x64/node.exe`))) throw Error("invalid_package_lock");
     if (artifact.id === "cloudflared" && (u.origin !== "https://github.com" || u.pathname !== `/cloudflare/cloudflared/releases/download/${artifact.version}/cloudflared-windows-amd64.exe`)) throw Error("invalid_package_lock");
+    if (artifact.id === "winsw" && (artifact.version !== "2.12.0" || u.origin !== "https://github.com" || u.pathname !== "/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe")) throw Error("invalid_package_lock");
   }
   for (const license of lock.licenses) {
     if (!safeFile(license.file) || !safePath(license.archive_path) || !license.archive_path.startsWith("licenses/")) throw Error("invalid_package_lock");
@@ -87,7 +88,11 @@ export async function buildWindowsPackage({ sourceRoot, vendorDir, outFile, sour
     for (const name of SOURCE_FILES) await include(path.join(sourceRoot, name), `runtime/${path.basename(name)}`);
     await include(path.join(sourceRoot, "config/windows-mcp.defaults.json"), "config/windows-mcp.defaults.json");
     await include(path.join(sourceRoot, "scripts/Verify-KTKPackage.ps1"), "Verify-KTKPackage.ps1");
-    const notice = `KTK Windows MCP ${packageLock.package_version}\nSource: ${sourceSha}\nWINDOWS PAYLOAD ONLY - NOT AN INSTALLER.\nDo not run on a user's PC until steps 16-18 (service, ACL, secret provisioning, pairing, and rollback) are complete.\nNo credentials or model files are included.\n`;
+    await include(path.join(sourceRoot, "scripts/Install-KTKMCP.ps1"), "Install-KTKMCP.ps1");
+    await include(path.join(sourceRoot, "scripts/Generate-KTKIdentity.mjs"), "Generate-KTKIdentity.mjs");
+    await include(path.join(sourceRoot, "config/KTKQwenMCP.xml"), "services/KTKQwenMCP.xml");
+    await include(path.join(sourceRoot, "config/KTKQwenTunnel.xml"), "services/KTKQwenTunnel.xml");
+    const notice = `KTK Windows MCP ${packageLock.package_version}\nSource: ${sourceSha}\nSTAGED INSTALLER - NOT YET READY FOR PRODUCTION.\nInstall-KTKMCP.ps1 stages Windows services disabled, generates device identity, and validates ACLs.\nNo service starts without separately approved secrets, pairing and Cloudflare rollout.\nDo not deploy to a friend's PC until Windows acceptance (step 18) succeeds.\nNo credentials or model files are included.\n`;
     await writeFile(path.join(stage, "README.txt"), notice, "utf8");
     await utimes(path.join(stage, "README.txt"), STABLE_TIME, STABLE_TIME);
     fileRecords.push({ path: "README.txt", sha256: createHash("sha256").update(notice).digest("hex"), bytes: Buffer.byteLength(notice) });
