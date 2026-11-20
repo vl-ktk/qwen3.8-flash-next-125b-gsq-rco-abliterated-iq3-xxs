@@ -33,7 +33,7 @@ export async function checkLocalHealth({ fetcher = fetch, port = 8765, timeoutMs
   } catch { return { status: "unavailable", reason: "health_unreachable" }; }
 }
 
-export async function getAdminStatus({ queryService, uptime = () => process.uptime(), now = () => new Date(), paired = false } = {}) {
+export async function getAdminStatus({ queryService, uptime = () => process.uptime(), now = () => new Date(), paired = false, health = null } = {}) {
   const checkedAt = now().toISOString();
   let service = { status: "unavailable" };
   if (typeof queryService === "function") {
@@ -49,7 +49,7 @@ export async function getAdminStatus({ queryService, uptime = () => process.upti
   }
   return {
     checked_at: checkedAt,
-    mcp: { status: "ready", version: WINDOWS_MCP_VERSION, uptime_seconds: Math.max(0, Math.floor(uptime())), local_identity_configured: Boolean(paired), cloud_pairing: "not_checked", model: "not_checked" },
+    mcp: { status: health?.status ?? "not_checked", version: health?.version ?? null, source_version: WINDOWS_MCP_VERSION, uptime_seconds: Math.max(0, Math.floor(uptime())), local_identity_configured: Boolean(paired), cloud_pairing: "not_checked", model: "not_checked" },
     windows_service: service,
     updates: { status: "installer_required", installed_version: null },
     recovery: { status: "pending_installer", automatic_os_reboot: false },
@@ -58,7 +58,7 @@ export async function getAdminStatus({ queryService, uptime = () => process.upti
 
 // This controller is for a physically authorized, elevated local console only.
 // It is intentionally not registered as an MCP tool or HTTP endpoint.
-export function createLocalServiceController({ platform = process.platform, invoke = execFileAsync, systemRoot = process.env.SystemRoot ?? "C:\\Windows", authorization = () => false, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+export function createLocalServiceController({ platform = process.platform, invoke = execFileAsync, systemRoot = "C:\\Windows", authorization = () => false, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   const exe = path.win32.join(systemRoot, "System32", "sc.exe");
   const check = async action => {
     if (!permitted.has(action)) throw safeError("unknown_admin_action");
@@ -112,31 +112,50 @@ const secretMatches = (actual, expected) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
-// Requires a second, short-lived interactive confirmation and schedules a
-// cancellable reboot after 120 seconds. Never uses /f or instant reboot.
-export function createLocalRebootGate({ platform = process.platform, now = () => Date.now(), random = () => randomBytes(16), invoke = execFileAsync, systemRoot = process.env.SystemRoot ?? "C:\\Windows", authorization = () => false } = {}) {
+// Do not use `shutdown /r /t 120`: Microsoft documents that any /t > 0
+// IMPLIES /f, potentially destroying unsaved game/application data. Instead
+// keep a cancellable 120-second timer in this local console, then request a
+// non-forcing `/t 0` restart. Exiting the console cancels the request.
+export function createLocalRebootGate({ platform = process.platform, now = () => Date.now(), random = () => randomBytes(16), invoke = execFileAsync, systemRoot = "C:\\Windows", authorization = () => false, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   let pending = null;
+  let timer = null;
+  let completion = null;
+  let resolveCompletion = null;
   return {
     prepare() {
       if (platform !== "win32") throw safeError("windows_unavailable");
+      if (timer !== null) throw safeError("reboot_already_pending");
       const value = random();
       if (!Buffer.isBuffer(value) || value.length < 16) throw safeError("reboot_challenge_unavailable");
       pending = { code: value.toString("hex"), until: now() + 60000 };
-      return { code: pending.code, expires_in_seconds: 60, cancel_command: "shutdown /a" };
+      return { code: pending.code, expires_in_seconds: 60, cancel_method: "local_console" };
     },
     async confirm(code) {
       const request = pending;
       pending = null; // Single use, including a failed attempt.
       if (platform !== "win32") throw safeError("windows_unavailable");
-      if (!request || now() >= request.until || !secretMatches(code, request.code) || !await authorization("reboot")) throw safeError("reboot_confirmation_required");
+      if (timer !== null || !request || now() >= request.until || !secretMatches(code, request.code) || !await authorization("reboot") || now() >= request.until) throw safeError("reboot_confirmation_required");
       const exe = path.win32.join(systemRoot, "System32", "shutdown.exe");
-      try {
-        await invoke(exe, ["/r", "/t", "120", "/c", "KTK Qwen MCP locally confirmed maintenance"], {
-          windowsHide: true, shell: false, timeout: 5000, maxBuffer: MAX_OUTPUT, encoding: "utf8",
-          env: { SystemRoot: systemRoot, WINDIR: systemRoot },
-        });
-        return { status: "scheduled", delay_seconds: 120, cancel_command: "shutdown /a" };
-      } catch { throw safeError("reboot_schedule_unavailable"); }
+      completion = new Promise(resolve => { resolveCompletion = resolve; });
+      timer = setTimer(async () => {
+        timer = null;
+        try {
+          await invoke(exe, ["/r", "/t", "0", "/c", "KTK Qwen MCP locally confirmed maintenance"], {
+            windowsHide: true, shell: false, timeout: 5000, maxBuffer: MAX_OUTPUT, encoding: "utf8",
+            env: { SystemRoot: systemRoot, WINDIR: systemRoot },
+          });
+          resolveCompletion({ status: "reboot_requested", force_close: false });
+        } catch { resolveCompletion({ status: "reboot_unavailable" }); }
+      }, 120000);
+      return { status: "local_countdown", delay_seconds: 120, cancel_method: "local_console" };
+    },
+    wait() { return completion ?? Promise.resolve({ status: "not_scheduled" }); },
+    cancel() {
+      if (timer === null) return false;
+      clearTimer(timer);
+      timer = null;
+      resolveCompletion({ status: "cancelled" });
+      return true;
     },
   };
 }
@@ -150,7 +169,7 @@ export function createGracefulShutdown(server, { timeoutMs = 5000, exit = () => 
     stopping = true;
     server.endMcpStreams?.();
     const finish = code => { if (finished) return; finished = true; exit(code); };
-    const timer = setTimer(() => { server.closeAllConnections?.(); finish(1); }, timeoutMs);
+    const timer = setTimer(() => { if (finished) return; server.closeAllConnections?.(); finish(1); }, timeoutMs);
     timer.unref?.();
     server.close(() => { clearTimer(timer); finish(0); });
     return true;
