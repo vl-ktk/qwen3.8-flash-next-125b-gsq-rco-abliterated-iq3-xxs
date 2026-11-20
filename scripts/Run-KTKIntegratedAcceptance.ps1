@@ -32,10 +32,11 @@ if ((Test-Path -LiteralPath $installed -PathType Leaf) -and (Test-Path -LiteralP
         return
     }
     & (Join-Path $source 'Maintain-KTKMCP.ps1') -Action Update -PackagePath $source -Resume -InstallerApproved
-    if ($LASTEXITCODE -ne 0) { throw 'integrated_mcp_upgrade_failed' }
+    # A PowerShell script reports failure via errors/$?, not $LASTEXITCODE.
+    if (-not $?) { throw 'integrated_mcp_upgrade_failed' }
 } else {
     # The existing acceptance entry handles ONLY a truly fresh install or a
     # vetted staged enrollment. It refuses foreign services or unknown data.
     & (Join-Path $source 'Run-KTKAcceptance.ps1') -Live
-    if ($LASTEXITCODE -ne 0) { throw 'integrated_mcp_enrollment_failed' }
+    if (-not $?) { throw 'integrated_mcp_enrollment_failed' }
 }
