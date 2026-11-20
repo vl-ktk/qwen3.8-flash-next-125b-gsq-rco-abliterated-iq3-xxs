@@ -8,6 +8,16 @@ Set-StrictMode -Version Latest
 try {
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne 'S-1-5-18') { throw 'unified_update_requires_system' }
 if ($Version -cnotmatch '^0\.18\.[1-9][0-9]{0,3}$') { throw 'unified_update_version_invalid' }
+# The already-installed 0.18.12 updater launches PowerShell with an explicit
+# limited environment and no PATH. Repair native command lookup INSIDE the
+# verified payload so a remote 0.18.12 -> 0.18.16 update can find sc.exe,
+# icacls.exe and schtasks.exe without first replacing the updater service.
+$windowsRoot = [string]$env:SystemRoot
+if ([string]::IsNullOrWhiteSpace($windowsRoot) -or
+    -not (Test-Path -LiteralPath (Join-Path $windowsRoot 'System32\sc.exe') -PathType Leaf) -or
+    -not (Test-Path -LiteralPath (Join-Path $windowsRoot 'System32\icacls.exe') -PathType Leaf)) { throw 'unified_update_windows_tools_missing' }
+$env:Path = (Join-Path $windowsRoot 'System32') + ';' + $windowsRoot
+$env:PATHEXT = '.COM;.EXE;.BAT;.CMD'
 $manifestPath = Join-Path $PackagePath 'MANIFEST.json'
 & (Join-Path $PackagePath 'Verify-KTKPackage.ps1') | Out-Null
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
