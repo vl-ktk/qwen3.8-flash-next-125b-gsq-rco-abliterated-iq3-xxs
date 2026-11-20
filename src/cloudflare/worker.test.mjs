@@ -154,7 +154,9 @@ test("positive code + PKCE flow forwards only to fixed VPC destination and strip
   const forwarded = f.calls[0];
   const digest = createHash("sha256").update(forwarded.body).digest("hex");
   const { "x-qwen-origin-timestamp": time, "x-qwen-origin-nonce": nonce, "x-qwen-origin-signature": signature } = forwarded.headers;
-  assert.equal(createHmac("sha256", Buffer.from(gatewayKey, "base64url")).update(`QWEN-ORIGIN-V1\n${time}\n${nonce}\nPOST\n/mcp\n${digest}`).digest("base64url"), signature);
+  const protectedHeaders = ["accept", "content-type", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-qwen-device-id", "x-qwen-device-nonce"];
+  const binding = protectedHeaders.map(name => `${name}:${forwarded.headers[name] ?? ""}`).join("\n");
+  assert.equal(createHmac("sha256", Buffer.from(gatewayKey, "base64url")).update(`QWEN-ORIGIN-V1\n${time}\n${nonce}\nPOST\n/mcp\n${digest}\n${binding}`).digest("base64url"), signature);
 });
 
 test("origin shared key is required before device attestation and MCP forwarding", async t => {
