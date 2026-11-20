@@ -6,6 +6,8 @@
 
 **Живой HTTPS v14:** первая проверка выявила старый HTML из DO из-за deferred code update. Повторный deployment v14 с immediate DO update — `c78206ab-c8a9-42a9-861f-9a7124926d04`; [live smoke #44723048490, повторный запуск](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44723048490) PASS для новой формы и обязательных OAuth/MCP отказов. Это не заменяет живую Windows/ChatGPT приёмку.
 
+**Живой Windows 0.18.3, частичный PASS:** владелец показал «Компьютер подключён» и «Setup has finished installing»; Cloudflare Tunnel API read-only `healthy`, 4 connections. Следующий приоритет — реальный OAuth→MCP вызов из ChatGPT и сверка desktop acceptance отчёта без PowerShell команд; пункт 18 пока [ ].
+
 ## Этап I. Подготовка проекта (1–4)
 - [x] **1. Зафиксировать архитектуру.** Один MCP-сервер на Windows друга, без отдельного Windows-агента/второй учётной записи. Сообщить конкретные ограничения служб и удалённого доступа.
 - [x] **2. Оформить отдельный исходник.** Приватный `vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs`, версии, README, план, тесты, HANDOFF.md, механизм отката.
