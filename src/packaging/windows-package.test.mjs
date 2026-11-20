@@ -31,6 +31,7 @@ async function fixture(t) {
   await writeFile(path.join(sourceRoot, "scripts/Activate-KTKMCP.ps1"), "# owner approval required\n");
   await writeFile(path.join(sourceRoot, "scripts/Maintain-KTKMCP.ps1"), "# confirmed repair, update, rollback, uninstall\n");
   await writeFile(path.join(sourceRoot, "scripts/Revoke-KTKMCP.mjs"), "export const revoke = true;\n");
+  await writeFile(path.join(sourceRoot, "scripts/Run-KTKAcceptance.ps1"), "# one entry acceptance and report\n");
   await writeFile(path.join(sourceRoot, "scripts/Start-KTKMCP.cmd"), "@echo off\n");
   await writeFile(path.join(sourceRoot, "config/KTKQwenMCP.xml"), "<service><id>KTKQwenMCP</id></service>\n");
   await writeFile(path.join(sourceRoot, "config/KTKQwenTunnel.xml"), "<service><id>KTKQwenTunnel</id></service>\n");
@@ -39,7 +40,7 @@ async function fixture(t) {
   await writeFile(path.join(sourceRoot, ".env"), "DO_NOT_BUNDLE_SECRET");
   await mkdir(vendorDir);
   const node = Buffer.alloc(1024 * 1024 + 20, 5), cloudflared = Buffer.alloc(1024 * 1024 + 30, 7), winsw = Buffer.alloc(1024 * 1024 + 40, 9);
-  const lock = { schema: 1, package_version: "0.17.0", platform: "win32", architecture: "x64", artifacts: [
+  const lock = { schema: 1, package_version: "0.18.0", platform: "win32", architecture: "x64", artifacts: [
     { id: "node", version: "24.22.3", file: "node.exe", archive_path: "bin/node.exe", url: "https://nodejs.org/dist/v24.22.3/win-x64/node.exe", sha256: fakeHash(node) },
     { id: "cloudflared", version: "2026.11.1", file: "cloudflared.exe", archive_path: "bin/cloudflared.exe", url: "https://github.com/cloudflare/cloudflared/releases/download/2026.11.1/cloudflared-windows-amd64.exe", sha256: fakeHash(cloudflared) },
     { id: "winsw", version: "2.12.0", file: "WinSW-x64.exe", archive_path: "bin/WinSW.exe", url: "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe", sha256: fakeHash(winsw) },
@@ -54,13 +55,13 @@ async function fixture(t) {
   await writeFile(path.join(vendorDir, "node-LICENSE"), "Node test license for packaging verification\n");
   await writeFile(path.join(vendorDir, "cloudflared-LICENSE"), "Cloudflare test license for packaging verification\n");
   await writeFile(path.join(vendorDir, "winsw-LICENSE"), "WinSW test license for packaging verification\n");
-  return { root, sourceRoot, vendorDir, lock, packageLock: lock, node, cloudflared, winsw, sourceSha: "a".repeat(40), outFile: path.join(root, "out", "KTK-Windows-MCP-0.17.0.zip") };
+  return { root, sourceRoot, vendorDir, lock, packageLock: lock, node, cloudflared, winsw, sourceSha: "a".repeat(40), outFile: path.join(root, "out", "KTK-Windows-MCP-0.18.0.zip") };
 }
 
 test("step 15 payload is reproducible, manifest-verified, without secrets or install actions", async t => {
   const f = await fixture(t);
   const result = await buildWindowsPackage(f);
-  assert.equal(result.fileCount, 34);
+  assert.equal(result.fileCount, 35);
   assert.equal(result.manifest.ready_for_installation, false);
   assert.equal(result.manifest.source_commit, f.sourceSha);
   assert.equal(result.manifest.target, "windows-x64");
@@ -70,7 +71,7 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(result.sha256, await sha256File(f.outFile));
   assert.equal((await readFile(f.outFile + ".sha256", "utf8")).trim(), `${result.sha256}  ${path.basename(f.outFile)}`);
   const zipFiles = (await run("unzip", ["-Z1", f.outFile])).stdout.trim().split("\n");
-  assert.equal(zipFiles.length, 34);
+  assert.equal(zipFiles.length, 35);
   assert.equal(zipFiles.includes("runtime/main.mjs"), true);
   assert.equal(zipFiles.includes("Verify-KTKPackage.ps1"), true);
   assert.equal(zipFiles.includes("bin/cloudflared.exe"), true);
@@ -79,6 +80,7 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(zipFiles.includes("Install-KTKMCP.ps1"), true);
   assert.equal(zipFiles.includes("Activate-KTKMCP.ps1"), true);
   assert.equal(zipFiles.includes("Maintain-KTKMCP.ps1"), true);
+  assert.equal(zipFiles.includes("Run-KTKAcceptance.ps1"), true);
   assert.equal(zipFiles.includes("Revoke-KTKMCP.mjs"), true);
   assert.equal(zipFiles.includes("runtime/device-revocation.mjs"), true);
   assert.equal(zipFiles.includes("Start-KTKMCP.cmd"), true);
@@ -89,7 +91,7 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(zipFiles.some(name => /(?:^|\/)\.env(?:$|\.)|\.test\.mjs$|key\.pem|private|\.git|token/i.test(name)), false);
   assert.doesNotMatch((await readZip(f.outFile, "README.txt")).toString("utf8"), /DO_NOT_BUNDLE_SECRET/);
   const manifest = JSON.parse(await readZip(f.outFile, "MANIFEST.json"));
-  assert.equal(manifest.files.length, 32);
+  assert.equal(manifest.files.length, 33);
   for (const record of manifest.files) assert.equal(fakeHash(await readZip(f.outFile, record.path)), record.sha256);
   await assert.rejects(() => buildWindowsPackage(f), /package_output_exists/);
   const other = { ...f, outFile: path.join(f.root, "out", "second.zip") };

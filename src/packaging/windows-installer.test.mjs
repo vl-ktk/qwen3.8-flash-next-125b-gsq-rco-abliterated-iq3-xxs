@@ -101,3 +101,26 @@ test("step17 maintenance requires local confirmation, exact service ownership an
   assert.match(script, /Assert-Exit 'remote_revoke_required'/);
   assert.doesNotMatch(script, /--token\s+ey|TUNNEL_TOKEN\s*=|QWEN_MCP_GATEWAY_KEY\s*=/);
 });
+
+test("step18 single-file setup wraps verified content and reports real acceptance, not a false cloud success", async () => {
+  const setup = await load("../../config/KTK-Setup.iss");
+  const runner = await load("../../scripts/Run-KTKAcceptance.ps1");
+  assert.match(setup, /PrivilegesRequired=admin/);
+  assert.match(setup, /Uninstallable=no/);
+  assert.match(setup, /Run-KTKAcceptance\.ps1/);
+  assert.match(setup, /RaiseException/);
+  assert.match(setup, /ewWaitUntilTerminated/);
+  assert.match(setup, /\/OFFLINE/);
+  assert.match(setup, /deleteafterinstall/);
+  assert.match(setup, /UNSIGNED/);
+  assert.match(runner, /\[switch\]\$Offline/);
+  assert.match(runner, /\[switch\]\$Live/);
+  assert.match(runner, /Verify-KTKPackage\.ps1/);
+  assert.match(runner, /Install-KTKMCP\.ps1/);
+  assert.match(runner, /Assert-OwnService/);
+  assert.match(runner, /Remove-OwnTestInstall/);
+  assert.match(runner, /existing_ktk_install_refusing_overwrite/);
+  assert.match(runner, /real ChatGPT OAuth\/MCP call still requires/);
+  assert.match(runner, /[.]txt/);
+  assert.doesNotMatch(runner, /(?:Remove-Service|sc\.exe delete|shutdown|Set-ExecutionPolicy)/i);
+});

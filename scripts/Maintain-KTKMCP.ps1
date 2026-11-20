@@ -122,7 +122,7 @@ if ($Action -in @('Update','Repair')) {
     Assert-OrdinaryDirectory $PackagePath
     & (Join-Path $PackagePath 'Verify-KTKPackage.ps1') | Out-Null
     $manifest = Get-Content -LiteralPath (Join-Path $PackagePath 'MANIFEST.json') -Raw | ConvertFrom-Json
-    if ($manifest.schema -ne 1 -or $manifest.target -cne 'windows-x64' -or $manifest.package_version -notmatch '^0\.17\.\d+$' -or $manifest.ready_for_installation -ne $false) { throw 'candidate_manifest_invalid' }
+    if ($manifest.schema -ne 1 -or $manifest.target -cne 'windows-x64' -or $manifest.package_version -notmatch '^0\.(17|18)\.\d+$' -or $manifest.ready_for_installation -ne $false) { throw 'candidate_manifest_invalid' }
     $listed = @($manifest.files | ForEach-Object { [string]$_.path })
     if (@($listed | Select-Object -Unique).Count -ne $listed.Count) { throw 'duplicate_manifest_path' }
     foreach ($needed in @('Maintain-KTKMCP.ps1','Revoke-KTKMCP.mjs','SelfTest-KTKMCP.mjs','Verify-KTKPackage.ps1','runtime/device-revocation.mjs','services/KTKQwenMCP.xml','services/KTKQwenTunnel.xml','bin/WinSW.exe','bin/node.exe','bin/cloudflared.exe')) {

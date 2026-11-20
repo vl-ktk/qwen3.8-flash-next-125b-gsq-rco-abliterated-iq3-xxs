@@ -32,20 +32,20 @@ jobs:
       - name: Fetch vendor binaries and verify pinned SHA-256
         run: node scripts/fetch-windows-vendors.mjs .generated/windows-vendors
       - name: Assemble verified staged installer candidate
-        run: node scripts/build-windows-package.mjs .generated/windows-vendors .generated/packages/KTK-Windows-MCP-0.17.0-win-x64.zip "$SOURCE_COMMIT"
+        run: node scripts/build-windows-package.mjs .generated/windows-vendors .generated/packages/KTK-Windows-MCP-0.18.0-win-x64.zip "$SOURCE_COMMIT"
       - name: Validate archive and outer SHA-256
         run: |
           cd .generated/packages
-          sha256sum --check KTK-Windows-MCP-0.17.0-win-x64.zip.sha256
-          unzip -t KTK-Windows-MCP-0.17.0-win-x64.zip
-          unzip -p KTK-Windows-MCP-0.17.0-win-x64.zip MANIFEST.json | node -e 'let x="";process.stdin.on("data",c=>x+=c);process.stdin.on("end",()=>{const m=JSON.parse(x);if(m.ready_for_installation!==false||m.source_commit!==process.env.SOURCE_COMMIT||m.package_version!=="0.17.0"||m.files.length<32||m.executables.length!==3)process.exit(1)})'
+          sha256sum --check KTK-Windows-MCP-0.18.0-win-x64.zip.sha256
+          unzip -t KTK-Windows-MCP-0.18.0-win-x64.zip
+          unzip -p KTK-Windows-MCP-0.18.0-win-x64.zip MANIFEST.json | node -e 'let x="";process.stdin.on("data",c=>x+=c);process.stdin.on("end",()=>{const m=JSON.parse(x);if(m.ready_for_installation!==false||m.source_commit!==process.env.SOURCE_COMMIT||m.package_version!=="0.18.0"||m.files.length<33||m.executables.length!==3)process.exit(1)})'
       - name: Save Windows staged candidate (not production-ready)
         uses: actions/upload-artifact@v4
         with:
-          name: KTK-Windows-MCP-step17-${{ github.run_number }}
+          name: KTK-Windows-MCP-step18-${{ github.run_number }}
           path: |
-            .generated/packages/KTK-Windows-MCP-0.17.0-win-x64.zip
-            .generated/packages/KTK-Windows-MCP-0.17.0-win-x64.zip.sha256
+            .generated/packages/KTK-Windows-MCP-0.18.0-win-x64.zip
+            .generated/packages/KTK-Windows-MCP-0.18.0-win-x64.zip.sha256
           retention-days: 7
           compression-level: 0
           if-no-files-found: error
@@ -57,7 +57,7 @@ jobs:
       - name: Parse Windows PowerShell 5.1 and service XML (no execution)
         shell: powershell
         run: |
-          foreach ($file in @('scripts/Install-KTKMCP.ps1','scripts/Activate-KTKMCP.ps1','scripts/Verify-KTKPackage.ps1','scripts/Maintain-KTKMCP.ps1')) {
+          foreach ($file in @('scripts/Install-KTKMCP.ps1','scripts/Activate-KTKMCP.ps1','scripts/Verify-KTKPackage.ps1','scripts/Maintain-KTKMCP.ps1','scripts/Run-KTKAcceptance.ps1')) {
             $errors = $null
             $tokens = $null
             $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file).Path, [ref]$tokens, [ref]$errors)
@@ -74,13 +74,67 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: KTK-Windows-MCP-step17-${{ github.run_number }}
+          name: KTK-Windows-MCP-step18-${{ github.run_number }}
           path: candidate
       - name: Offline non-elevated preflight on Windows (no installation)
         shell: powershell
         run: |
-          Expand-Archive -LiteralPath 'candidate/KTK-Windows-MCP-0.17.0-win-x64.zip' -DestinationPath 'candidate/extracted'
+          Expand-Archive -LiteralPath 'candidate/KTK-Windows-MCP-0.18.0-win-x64.zip' -DestinationPath 'candidate/extracted'
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Install-KTKMCP.ps1' -CheckOnly
           if ($LASTEXITCODE -ne 0) { throw 'Windows preflight failed' }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Maintain-KTKMCP.ps1' -Action Update -PackagePath 'candidate/extracted' -CheckOnly
           if ($LASTEXITCODE -ne 0) { throw 'Windows maintenance package preflight failed' }
+  windows-real-scm-offline:
+    needs: windows-payload
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: KTK-Windows-MCP-step18-${{ github.run_number }}
+          path: candidate
+      - name: Fully isolated hosted-runner installation, ACL, service and cleanup smoke
+        shell: powershell
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Requires GitHub-hosted ephemeral Windows' }
+          Expand-Archive -LiteralPath 'candidate/KTK-Windows-MCP-0.18.0-win-x64.zip' -DestinationPath 'candidate/extracted'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Run-KTKAcceptance.ps1' -Offline
+          if ($LASTEXITCODE -ne 0) { throw 'Real Windows SCM/ACL acceptance failed' }
+          if ((Get-Service KTKQwenMCP,KTKQwenTunnel -ErrorAction SilentlyContinue).Count -gt 0) { throw 'Test services survived cleanup' }
+  windows-setup-exe:
+    needs: windows-payload
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: KTK-Windows-MCP-step18-${{ github.run_number }}
+          path: candidate
+      - name: Build single-file test Setup.exe from verified ZIP
+        shell: powershell
+        run: |
+          Expand-Archive -LiteralPath 'candidate/KTK-Windows-MCP-0.18.0-win-x64.zip' -DestinationPath 'candidate/extracted'
+          $compiler = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $compiler) { choco install innosetup --no-progress -y; $compiler = (Get-Command ISCC.exe -ErrorAction Stop).Source }
+          New-Item -ItemType Directory -Path 'candidate/setup' -Force | Out-Null
+          $src = (Resolve-Path 'candidate/extracted').Path
+          $dst = (Resolve-Path 'candidate/setup').Path
+          & $compiler "/DSourceRoot=$src" "/DOutputRoot=$dst" 'config/KTK-Setup.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Setup.exe compilation failed' }
+          $exe = Join-Path $dst 'KTK-Qwen-MCP-Setup-0.18.0-TEST-UNSIGNED.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Setup.exe not generated' }
+          (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($exe) | Set-Content -Path ($exe + '.sha256')
+          & $exe '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' '/OFFLINE'
+          if ($LASTEXITCODE -ne 0) { throw 'One-click Setup.exe offline lifecycle failed' }
+          if ((Get-Service KTKQwenMCP,KTKQwenTunnel -ErrorAction SilentlyContinue).Count -gt 0) { throw 'One-click Setup left test services behind' }
+      - name: Upload standalone unsigned acceptance EXE (not production-ready)
+        uses: actions/upload-artifact@v4
+        with:
+          name: KTK-MCP-Setup-step18-${{ github.run_number }}
+          path: |
+            candidate/setup/KTK-Qwen-MCP-Setup-0.18.0-TEST-UNSIGNED.exe
+            candidate/setup/KTK-Qwen-MCP-Setup-0.18.0-TEST-UNSIGNED.exe.sha256
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
