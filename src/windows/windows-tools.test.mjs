@@ -8,10 +8,10 @@ import { listenWindowsMcp } from "./mcp-server.mjs";
 
 test("read-only allowlist has stable schemas; no arbitrary command, script, write or service control", () => {
   const tools = createWindowsToolRegistry();
-  assert.deepEqual(tools.list().map(item => item.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status"]);
+  assert.deepEqual(tools.list().map(item => item.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan"]);
   assert.equal(tools.has("powershell"), false);
   assert.equal(tools.has("file_read"), false); // default-deny until installer configures roots
-  for (const name of ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status"]) {
+  for (const name of ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan"]) {
     const definition = tools.list().find(item => item.name === name);
     assert.equal(definition.annotations.readOnlyHint, true);
     assert.equal(definition.inputSchema.additionalProperties, false);
@@ -44,6 +44,10 @@ test("injection, wildcard, arbitrary args and resource-abuse inputs fail before 
     ["system_info", { command: "whoami" }],
     ["system_monitor", { command: "Get-Process" }],
     ["system_monitor", { interval: 1 }],
+    ["pc_preflight", { command: "whoami" }],
+    ["storage_check", { volume: "C:" }],
+    ["runtime_check", { script: "curl" }],
+    ["installation_plan", { install: true }],
     ["process_list", { limit: 0 }],
     ["process_list", { limit: 5000 }],
     ["process_list", { name: "*" }],
