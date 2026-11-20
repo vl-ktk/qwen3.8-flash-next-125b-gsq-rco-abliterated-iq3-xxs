@@ -26,6 +26,8 @@ test("step16 Windows service templates run as LocalService and cannot auto-start
 test("step16 installer is first-install-only and transactional with fail-closed activation", async () => {
   const installer = await load("../../scripts/Install-KTKMCP.ps1");
   assert.match(installer, /\[switch\]\$CheckOnly/);
+  assert.match(installer, /\[switch\]\$Enroll/);
+  assert.match(installer, /Activate-KTKMCP\.ps1/);
   assert.match(installer, /Verify-KTKPackage\.ps1/);
   assert.match(installer, /WindowsIdentity/);
   assert.match(installer, /Start-Process.+-Verb RunAs/);
@@ -45,6 +47,13 @@ test("step16 installer is first-install-only and transactional with fail-closed 
   assert.doesNotMatch(installer, /(?:QWEN_MCP_GATEWAY_KEY|TUNNEL_TOKEN)\s*=/);
 });
 
+test("step16 single-action Windows launcher requests enrollment without embedding secrets", async () => {
+  const launcher = await load("../../scripts/Start-KTKMCP.cmd");
+  assert.match(launcher, /Install-KTKMCP\.ps1" -Enroll/);
+  assert.match(launcher, /-ExecutionPolicy Bypass/);
+  assert.doesNotMatch(launcher, /TUNNEL_TOKEN|GATEWAY_KEY|--token\s+ey/);
+});
+
 test("step16 device identity is written exclusively to protected destination", async () => {
   const script = await load("../../scripts/Generate-KTKIdentity.mjs");
   assert.match(script, /generateDeviceIdentity/);
@@ -53,4 +62,18 @@ test("step16 device identity is written exclusively to protected destination", a
   assert.match(script, /device_fingerprint/);
   assert.doesNotMatch(script, /process\.stdout\.write\([^;]*private_pkcs8/);
   assert.ok(root.endsWith("/"));
+});
+
+test("step16 enrollment activates only after owner approval, self-test and live Tunnel edge connection", async () => {
+  const activate = await load("../../scripts/Activate-KTKMCP.ps1");
+  assert.match(activate, /Enroll-KTKMCP\.mjs/);
+  assert.match(activate, /SelfTest-KTKMCP\.mjs/);
+  assert.match(activate, /emergency\.lock/);
+  assert.match(activate, /cloudflared_tunnel_ha_connections/);
+  assert.match(activate, /start= delayed-auto/);
+  assert.match(activate, /start= demand/);
+  assert.match(activate, /existing_enrollment_requires_repair_step_17/);
+  assert.doesNotMatch(activate, /(?:--token\s+ey|TUNNEL_TOKEN\s*=|Write-Output.*gateway_key)/i);
+  const tunnel = await load("../../config/KTKQwenTunnel.xml");
+  assert.match(tunnel, /--metrics 127\.0\.0\.1:20241/);
 });

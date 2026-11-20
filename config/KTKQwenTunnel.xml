@@ -3,7 +3,7 @@
   <name>KTK Qwen Cloudflare Tunnel</name>
   <description>Dedicated Cloudflare connector for the local MCP origin.</description>
   <executable>%BASE%\bin\cloudflared.exe</executable>
-  <arguments>tunnel --no-autoupdate run --token-file "%PROGRAMDATA%\KTK\QwenMCP\secrets\tunnel.token"</arguments>
+  <arguments>tunnel --no-autoupdate --metrics 127.0.0.1:20241 run --token-file "%PROGRAMDATA%\KTK\QwenMCP\secrets\tunnel.token"</arguments>
   <workingdirectory>%BASE%</workingdirectory>
   <startmode>Manual</startmode>
   <serviceaccount><domain>NT AUTHORITY</domain><user>LocalService</user></serviceaccount>

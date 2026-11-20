@@ -20,12 +20,16 @@ async function fixture(t) {
   await mkdir(path.join(sourceRoot, "src/windows"), { recursive: true });
   await mkdir(path.join(sourceRoot, "scripts"), { recursive: true });
   await mkdir(path.join(sourceRoot, "config"), { recursive: true });
-  for (const name of ["admin-cli", "administration", "device-identity", "emergency-lock", "main", "mcp-server", "monitoring", "origin-auth", "windows-tools"]) {
+  for (const name of ["admin-cli", "administration", "device-identity", "device-bootstrap", "device-enrollment", "device-selftest", "emergency-lock", "main", "mcp-server", "monitoring", "origin-auth", "windows-tools"]) {
     await writeFile(path.join(sourceRoot, `src/windows/${name}.mjs`), `export const ${name.replace(/-/g, "_")} = true;\n`);
   }
   await writeFile(path.join(sourceRoot, "scripts/Verify-KTKPackage.ps1"), "# check sha256\n");
   await writeFile(path.join(sourceRoot, "scripts/Install-KTKMCP.ps1"), "# stage only; no startup\n");
   await writeFile(path.join(sourceRoot, "scripts/Generate-KTKIdentity.mjs"), "export const generate = true;\n");
+  await writeFile(path.join(sourceRoot, "scripts/Enroll-KTKMCP.mjs"), "export const enroll = true;\n");
+  await writeFile(path.join(sourceRoot, "scripts/SelfTest-KTKMCP.mjs"), "export const selftest = true;\n");
+  await writeFile(path.join(sourceRoot, "scripts/Activate-KTKMCP.ps1"), "# owner approval required\n");
+  await writeFile(path.join(sourceRoot, "scripts/Start-KTKMCP.cmd"), "@echo off\n");
   await writeFile(path.join(sourceRoot, "config/KTKQwenMCP.xml"), "<service><id>KTKQwenMCP</id></service>\n");
   await writeFile(path.join(sourceRoot, "config/KTKQwenTunnel.xml"), "<service><id>KTKQwenTunnel</id></service>\n");
   await writeFile(path.join(sourceRoot, "config/windows-mcp.defaults.json"), '{"bind":"127.0.0.1"}\n');
@@ -33,7 +37,7 @@ async function fixture(t) {
   await writeFile(path.join(sourceRoot, ".env"), "DO_NOT_BUNDLE_SECRET");
   await mkdir(vendorDir);
   const node = Buffer.alloc(1024 * 1024 + 20, 5), cloudflared = Buffer.alloc(1024 * 1024 + 30, 7), winsw = Buffer.alloc(1024 * 1024 + 40, 9);
-  const lock = { schema: 1, package_version: "0.16.0", platform: "win32", architecture: "x64", artifacts: [
+  const lock = { schema: 1, package_version: "0.16.1", platform: "win32", architecture: "x64", artifacts: [
     { id: "node", version: "24.22.3", file: "node.exe", archive_path: "bin/node.exe", url: "https://nodejs.org/dist/v24.22.3/win-x64/node.exe", sha256: fakeHash(node) },
     { id: "cloudflared", version: "2026.11.1", file: "cloudflared.exe", archive_path: "bin/cloudflared.exe", url: "https://github.com/cloudflare/cloudflared/releases/download/2026.11.1/cloudflared-windows-amd64.exe", sha256: fakeHash(cloudflared) },
     { id: "winsw", version: "2.12.0", file: "WinSW-x64.exe", archive_path: "bin/WinSW.exe", url: "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe", sha256: fakeHash(winsw) },
@@ -48,13 +52,13 @@ async function fixture(t) {
   await writeFile(path.join(vendorDir, "node-LICENSE"), "Node test license for packaging verification\n");
   await writeFile(path.join(vendorDir, "cloudflared-LICENSE"), "Cloudflare test license for packaging verification\n");
   await writeFile(path.join(vendorDir, "winsw-LICENSE"), "WinSW test license for packaging verification\n");
-  return { root, sourceRoot, vendorDir, lock, packageLock: lock, node, cloudflared, winsw, sourceSha: "a".repeat(40), outFile: path.join(root, "out", "KTK-Windows-MCP-0.16.0.zip") };
+  return { root, sourceRoot, vendorDir, lock, packageLock: lock, node, cloudflared, winsw, sourceSha: "a".repeat(40), outFile: path.join(root, "out", "KTK-Windows-MCP-0.16.1.zip") };
 }
 
 test("step 15 payload is reproducible, manifest-verified, without secrets or install actions", async t => {
   const f = await fixture(t);
   const result = await buildWindowsPackage(f);
-  assert.equal(result.fileCount, 24);
+  assert.equal(result.fileCount, 31);
   assert.equal(result.manifest.ready_for_installation, false);
   assert.equal(result.manifest.source_commit, f.sourceSha);
   assert.equal(result.manifest.target, "windows-x64");
@@ -64,19 +68,23 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(result.sha256, await sha256File(f.outFile));
   assert.equal((await readFile(f.outFile + ".sha256", "utf8")).trim(), `${result.sha256}  ${path.basename(f.outFile)}`);
   const zipFiles = (await run("unzip", ["-Z1", f.outFile])).stdout.trim().split("\n");
-  assert.equal(zipFiles.length, 24);
+  assert.equal(zipFiles.length, 31);
   assert.equal(zipFiles.includes("runtime/main.mjs"), true);
   assert.equal(zipFiles.includes("Verify-KTKPackage.ps1"), true);
   assert.equal(zipFiles.includes("bin/cloudflared.exe"), true);
   assert.equal(zipFiles.includes("bin/node.exe"), true);
   assert.equal(zipFiles.includes("bin/WinSW.exe"), true);
   assert.equal(zipFiles.includes("Install-KTKMCP.ps1"), true);
+  assert.equal(zipFiles.includes("Activate-KTKMCP.ps1"), true);
+  assert.equal(zipFiles.includes("Start-KTKMCP.cmd"), true);
+  assert.equal(zipFiles.includes("Enroll-KTKMCP.mjs"), true);
+  assert.equal(zipFiles.includes("SelfTest-KTKMCP.mjs"), true);
   assert.equal(zipFiles.includes("services/KTKQwenMCP.xml"), true);
   assert.equal(zipFiles.includes("services/KTKQwenTunnel.xml"), true);
-  assert.equal(zipFiles.some(name => /\.env|test\.mjs|key\.pem|private|\.git|token/i.test(name)), false);
+  assert.equal(zipFiles.some(name => /(?:^|\/)\.env(?:$|\.)|\.test\.mjs$|key\.pem|private|\.git|token/i.test(name)), false);
   assert.doesNotMatch((await readZip(f.outFile, "README.txt")).toString("utf8"), /DO_NOT_BUNDLE_SECRET/);
   const manifest = JSON.parse(await readZip(f.outFile, "MANIFEST.json"));
-  assert.equal(manifest.files.length, 22);
+  assert.equal(manifest.files.length, 29);
   for (const record of manifest.files) assert.equal(fakeHash(await readZip(f.outFile, record.path)), record.sha256);
   await assert.rejects(() => buildWindowsPackage(f), /package_output_exists/);
   const other = { ...f, outFile: path.join(f.root, "out", "second.zip") };

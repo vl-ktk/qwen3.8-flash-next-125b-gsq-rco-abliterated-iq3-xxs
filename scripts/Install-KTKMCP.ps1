@@ -1,9 +1,10 @@
 # Stage-only, first-install Windows x64 MCP service installer (step 16).
 # Intentionally NO cloud/production writes, no secret provisioning, no service start.
 # Run from an extracted, independently SHA256-verified package.
-param([switch]$CheckOnly)
+param([switch]$CheckOnly, [switch]$Enroll)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($CheckOnly -and $Enroll) { throw 'choose_check_only_or_enroll' }
 
 function Assert-NativeSuccess([string]$Action) {
     if ($LASTEXITCODE -ne 0) { throw ("{0}_failed_exit_{1}" -f $Action, $LASTEXITCODE) }
@@ -55,7 +56,7 @@ if ($CheckOnly) { Write-Output 'KTK preflight OK: package, OS, x64, free disk, p
 if (-not (Test-Administrator)) {
     # No mutable action occurs until the UAC elevation succeeds.
     if ($PSCommandPath.Contains('"')) { throw 'unsafe_script_path' }
-    $argument = '-NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '"'
+    $argument = '-NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '"' + $(if ($Enroll) { ' -Enroll' } else { '' })
     $child = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argument -Wait -PassThru
     if ($null -eq $child -or $child.ExitCode -ne 0) { throw 'elevated_installer_failed_or_declined' }
     return
@@ -147,4 +148,11 @@ try {
     if ($stageCreated -and (Test-Path -LiteralPath $stage)) { Remove-Item -LiteralPath $stage -Recurse -Force }
     if ($dataCreated -and (Test-Path -LiteralPath $dataRoot)) { Remove-Item -LiteralPath $dataRoot -Recurse -Force }
     throw $failure
+}
+
+if ($Enroll) {
+    # Activation runs AFTER the staged-install rollback boundary. A failed
+    # network enrollment leaves the new instance Manual/Stopped + locked,
+    # not an unprotected partially configured service.
+    & (Join-Path $installRoot 'Activate-KTKMCP.ps1')
 }
