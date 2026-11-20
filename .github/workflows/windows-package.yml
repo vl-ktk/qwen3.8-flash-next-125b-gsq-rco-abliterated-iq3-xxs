@@ -1,10 +1,12 @@
-name: Windows payload checks
+name: Windows installer candidate checks
 
 on:
   pull_request:
     paths:
       - "config/windows-package.lock.json"
       - "config/windows-mcp.defaults.json"
+      - "config/KTKQwenMCP.xml"
+      - "config/KTKQwenTunnel.xml"
       - "src/windows/**"
       - "src/packaging/**"
       - "scripts/**"
@@ -29,21 +31,39 @@ jobs:
         run: node --test src/packaging/*.test.mjs
       - name: Fetch vendor binaries and verify pinned SHA-256
         run: node scripts/fetch-windows-vendors.mjs .generated/windows-vendors
-      - name: Assemble verified source payload
-        run: node scripts/build-windows-package.mjs .generated/windows-vendors .generated/packages/KTK-Windows-MCP-0.15.0-win-x64.zip "$SOURCE_COMMIT"
+      - name: Assemble verified staged installer candidate
+        run: node scripts/build-windows-package.mjs .generated/windows-vendors .generated/packages/KTK-Windows-MCP-0.16.0-win-x64.zip "$SOURCE_COMMIT"
       - name: Validate archive and outer SHA-256
         run: |
           cd .generated/packages
-          sha256sum --check KTK-Windows-MCP-0.15.0-win-x64.zip.sha256
-          unzip -t KTK-Windows-MCP-0.15.0-win-x64.zip
-          unzip -p KTK-Windows-MCP-0.15.0-win-x64.zip MANIFEST.json | node -e 'let x="";process.stdin.on("data",c=>x+=c);process.stdin.on("end",()=>{const m=JSON.parse(x);if(m.ready_for_installation!==false||m.source_commit!==process.env.SOURCE_COMMIT||m.files.length<15)process.exit(1)})'
-      - name: Save Windows candidate payload (not an installer)
+          sha256sum --check KTK-Windows-MCP-0.16.0-win-x64.zip.sha256
+          unzip -t KTK-Windows-MCP-0.16.0-win-x64.zip
+          unzip -p KTK-Windows-MCP-0.16.0-win-x64.zip MANIFEST.json | node -e 'let x="";process.stdin.on("data",c=>x+=c);process.stdin.on("end",()=>{const m=JSON.parse(x);if(m.ready_for_installation!==false||m.source_commit!==process.env.SOURCE_COMMIT||m.files.length<22||m.executables.length!==3)process.exit(1)})'
+      - name: Save Windows staged candidate (not production-ready)
         uses: actions/upload-artifact@v4
         with:
-          name: KTK-Windows-MCP-step15-${{ github.run_number }}
+          name: KTK-Windows-MCP-step16-${{ github.run_number }}
           path: |
-            .generated/packages/KTK-Windows-MCP-0.15.0-win-x64.zip
-            .generated/packages/KTK-Windows-MCP-0.15.0-win-x64.zip.sha256
+            .generated/packages/KTK-Windows-MCP-0.16.0-win-x64.zip
+            .generated/packages/KTK-Windows-MCP-0.16.0-win-x64.zip.sha256
           retention-days: 7
           compression-level: 0
           if-no-files-found: error
+  windows-source-parse:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse Windows PowerShell 5.1 and service XML (no execution)
+        shell: powershell
+        run: |
+          foreach ($file in @('scripts/Install-KTKMCP.ps1','scripts/Verify-KTKPackage.ps1')) {
+            $errors = $null
+            $tokens = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file).Path, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) { $errors | Out-String | Write-Error; throw 'PowerShell parser failed' }
+          }
+          foreach ($file in @('config/KTKQwenMCP.xml','config/KTKQwenTunnel.xml')) {
+            [xml]$xml = Get-Content -LiteralPath $file -Raw
+            if ($xml.service.startmode -ne 'Manual' -or $xml.service.serviceaccount.user -ne 'LocalService') { throw 'Unsafe service configuration' }
+          }
