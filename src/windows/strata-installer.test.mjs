@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import lock from "./strata-runtime.lock.json" with { type: "json" };
-import { fetchPinnedStrataScript, installStrata, recoverIncompleteStrata, strataInstallPlan, strataInstallRoot, validateStrataRelease } from "./strata-installer.mjs";
+import { fetchPinnedStrataScript, installStrata, recoverIncompleteStrata, strataInstallPlan, strataInstallRoot, validateStrataRelease, verifyStrataEngineInventory } from "./strata-installer.mjs";
 
 const temp = async t => { const dir = await mkdtemp(path.join(os.tmpdir(), "ktk-strata-installer-test-")); t.after(() => rm(dir, { recursive: true, force: true })); return dir; };
 const options = root => ({ platform: "win32", arch: "x64", root, localAppData: path.dirname(path.dirname(root)), availableBytes: 3_000_000_000, ownerApproved: true });
@@ -60,20 +60,30 @@ test("fresh KTK install runs only verified local script and signed updater, with
     } else {
       assert.equal(program, path.join(root, "terminal", "current", "python", "python.exe"));
     }
-    return { stdout: "{}", stderr: "" };
+    return { stdout: calls.length === 2 ? "Strata 0.2.17" : calls.length === 4 ? JSON.stringify({ schema_version: 1, ok: true, families: [{ family: "qwen", engines: [{ active: true, fits: true, version: "0.1.63", backend: "cuda", variant: "cuda12" }] }] }) : "{}", stderr: "" };
   };
   const result = await installStrata({ ...options(root), getScript, invoke, now: () => new Date("2026-11-20T14:00:00Z") });
   assert.equal(result.status, "installed");
-  assert.equal(result.engine, "signed_updater_completed_inference_unverified");
+  assert.deepEqual(result.engine, { version: "0.1.63", backend: "cuda", variant: "cuda12", inference_tested: false });
   assert.equal(calls.length, 4);
   assert.deepEqual(calls[1].args.slice(1), ["--version"]);
   assert.deepEqual(calls[2].args.slice(1), ["update", "--no-control", "--feed", lock.feed, "--output", "json"]);
   assert.deepEqual(calls[3].args.slice(1), ["components", "engines", "--output", "json"]);
   const state = JSON.parse(await readFile(path.join(root, "ktk-strata-install.json"), "utf8"));
   assert.equal(state.status, "ready");
+  assert.equal(state.engine.variant, "cuda12");
   assert.equal(state.at, "2026-11-20T14:00:00.000Z");
   const subsequent = await installStrata({ ...options(root), getScript: async () => { throw Error("must_skip"); }, invoke: async () => { throw Error("must_skip"); } });
   assert.equal(subsequent.status, "already_installed");
+});
+
+test("engine inventory refuses missing or inactive CUDA and unexpected versions", () => {
+  const wrap = engines => JSON.stringify({ schema_version: 1, ok: true, families: [{ family: "qwen", engines }] });
+  const valid = { version: "0.1.63", backend: "cuda", variant: "cuda13", active: true, fits: true };
+  assert.equal(verifyStrataEngineInventory(wrap([valid])).variant, "cuda13");
+  for (const input of ["{}", "not-json", wrap([]), wrap([{ ...valid, active: false }]), wrap([{ ...valid, version: "0.1.62" }]), wrap([{ ...valid, backend: "hip" }])]) {
+    assert.throws(() => verifyStrataEngineInventory(input), /strata_engine_unverified/);
+  }
 });
 
 test("failure removes only new KTK-managed tree; existing vendor and unrelated files are preserved", async t => {
