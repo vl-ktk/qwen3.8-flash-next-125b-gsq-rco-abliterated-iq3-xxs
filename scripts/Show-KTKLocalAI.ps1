@@ -1,4 +1,4 @@
-# Launched by Setup.exe as its ORIGINAL interactive user, never LocalService
+﻿# Launched by Setup.exe as its ORIGINAL interactive user, never LocalService
 # or the elevated administrator. The end user never needs PowerShell commands.
 param([switch]$CheckOnly)
 $ErrorActionPreference = 'Stop'
