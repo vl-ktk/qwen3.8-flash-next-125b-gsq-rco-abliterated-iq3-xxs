@@ -42,9 +42,16 @@
 - [PR #15](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/15) **MERGED** (squash commit `4a7fa899a992a52e54eb185c6148176d5f7d5383`); [CI #44579086990](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44579086990) SUCCESS (npm ci, check, tests, build).
 - **Рабочий Cloudflare Worker v11 не изменён** (подтверждено read-only API). Для закрытия шага: реальная Windows + показания на железе + сквозная связь при единой установке.
 
+## Пункт 13 — локальное администрирование (исходник, Windows не проверена)
+- `src/windows/administration.mjs`: `getAdminStatus`, `checkLocalHealth`, управление строго определённой `KTKQwenMCP` через `sc.exe` с подтверждением, ожидание STOPPED при restart, правила восстановления только службы (без OS reboot), локальная одноразовая привязка перезагрузки и безопасный graceful shutdown.
+- `src/windows/admin-cli.mjs`: локальные `status`/`health`, интерактивные `start`/`stop`/`restart`/`configure_recovery`/`reboot`; без TTY и Windows привилегированные операции запрещены. Удалённый MCP предоставляет только read-only `admin_status` (`qwen:read`), не сервисные команды.
+- Исправлено расхождение `/healthz` vs `/health`: основной endpoint `/healthz`, старый `/health` сохранён. Runtime `0.13.0`. Перезагрузка: 60 секунд на код и дополнительную фразу, затем отменяемый локальный 120-секундный таймер и `shutdown /r /t 0` **без forced closure**; `shutdown /t 120` не использовать из-за неявного `/f` по документации Microsoft. `update` не реализован до пункта 17, статус честно сообщает `installer_required`.
+- Автоматические тесты (включая mock `sc.exe`, reboot и loopback HTTP) выполняются в Linux, без действий на реальной Windows; отчёт `docs/STEP_13_REPORT.md`. Текущий источник `feature/step13-local-administration` до слияния, CI после push уточнить.
+- **Production Cloudflare не менялся в рамках пункта 13**. Последняя подтверждённая ранее версия — v11; перед будущим развёртыванием повторно сверить актуальную версию и откат.
+
 ## Что осталось
 - Пункт 7: полноценная сквозная проверка ChatGPT → VPC → Windows. Tunnel `ktk-qwen125b-friend-pc` пока inactive (0 соединений), Windows MCP разработан локально, но не установлен; реальное соединение отсутствует.
 - Пункт 8: HTTP origin `/device/attest` в Windows MCP реализован (п.10), остаётся защитить локальный приватный ключ ACL и подключить pairing к установщику (п.15–16). До приёмки отмечать [ ].
-- Продолжить пункт 13 (Windows administration), затем 14–18 (Windows runtime и установщик). **Решение владельца:** все доступные тесты делаем сами; его Windows ПК не трогаем до одной общей тестовой установки после подготовки пакета. Затем исправления и окончательный архив для ПК друга.
+- Завершить GitHub-проверку и CI пункта 13, затем пункт 14–18 (привилегии, установщик и обслуживание). **Решение владельца:** все доступные тесты делаем сами; его Windows ПК не трогаем до одной общей тестовой установки после подготовки пакета. Затем исправления и окончательный архив для ПК друга.
 
 План: `docs/ROADMAP_24.md`; исходная OAuth диагностика: `docs/STEP_7_REPORT.md`.
