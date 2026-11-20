@@ -199,7 +199,8 @@ export function chooseSc117Volume(volumes, needed = expectedBytes + MIN_PACK_ROO
 // An interrupted D: installation takes precedence over a new empty C:
 // installation. Disk admission accounts for bytes already on disk, without
 // trusting them as verified content (the downloader still hashes them).
-export async function selectSc117Target(volumes, lock = modelLock, rootForDrive = drive => path.win32.join(`${drive}\\`, "KTK", "Models", "SC117-IQ3_XXS")) {
+export async function selectSc117Target(volumes, lock = modelLock,
+  rootForDrive = drive => path.win32.join(`${drive}\\`, "KTK", "Models", "SC117-IQ3_XXS"), measureFile = ensureRegular) {
   validateSc117Lock(lock);
   for (const drive of ["D:", "C:"]) {
     const volume = volumes.find(v => v?.drive === drive && Number.isSafeInteger(v.free_bytes));
@@ -214,8 +215,8 @@ export async function selectSc117Target(volumes, lock = modelLock, rootForDrive 
     let remaining = 0;
     for (const asset of lock.files) {
       const dst = sc117AssetLocation(root, asset, lock);
-      const complete = await ensureRegular(dst);
-      const partial = await ensureRegular(`${dst}.part`);
+      const complete = await measureFile(dst);
+      const partial = await measureFile(`${dst}.part`);
       remaining += complete?.size === asset.bytes ? 0 : asset.bytes - (partial ? Math.min(partial.size, asset.bytes) : 0);
     }
     if (volume.free_bytes < remaining + MIN_PACK_ROOM) fail("sc117_disk_insufficient_resume");
