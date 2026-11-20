@@ -99,7 +99,7 @@ export function verifyStrataEngineInventory(stdout, config = lock) {
 
 export async function installStrata({ ownerApproved = false, platform = process.platform, arch = process.arch,
   root = null, localAppData = process.env.LOCALAPPDATA, config = lock,
-  fetchImpl = fetch, getScript = fetchPinnedStrataScript, invoke = execFileAsync, availableBytes = null, now = () => new Date() } = {}) {
+  fetchImpl = fetch, getScript = fetchPinnedStrataScript, invoke = execFileAsync, availableBytes = null, now = () => new Date(), onStage = null } = {}) {
   validateStrataRelease(config);
   if (!ownerApproved) fail("strata_owner_approval_required");
   if (platform !== "win32" || arch !== "x64") fail("strata_windows_x64_required");
@@ -114,6 +114,7 @@ export async function installStrata({ ownerApproved = false, platform = process.
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail("strata_install_root_untrusted");
     const state = await readState(stateFile);
     if (state.schema !== 1 || state.version !== config.app_version || state.status !== "ready" || !(await regular(py)) || !(await regular(entry))) fail("strata_existing_install_unrecognized");
+    if (onStage) await onStage("already_installed");
     return { status: "already_installed", version: config.app_version, engine: "previously_recorded_not_retested", location: installRoot };
   }
   let free;
@@ -132,6 +133,7 @@ export async function installStrata({ ownerApproved = false, platform = process.
   try {
     await writeFile(stateFile, JSON.stringify({ schema: 1, status: "installing", version: config.app_version, nonce }), { flag: "wx", mode: 0o600 });
     owned = true;
+    if (onStage) await onStage("downloading_terminal");
     const script = await getScript({ config, fetchImpl });
     const scriptPath = path.join(installRoot, "verified-install.ps1");
     await writeFile(scriptPath, script, { flag: "wx", mode: 0o600 });
@@ -146,6 +148,7 @@ export async function installStrata({ ownerApproved = false, platform = process.
       PYTHONNOUSERSITE: "1", PYTHONHOME: "", PYTHONPATH: "",
     };
     const ps = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    if (onStage) await onStage("installing_terminal");
     await safeCall(invoke, ps, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath], env, installRoot, 900000);
     if (!(await regular(py)) || !(await regular(entry))) fail("strata_terminal_incomplete");
     const pythonEnv = { ...env, STRATA_HOME: path.join(installRoot, "home") };
@@ -153,11 +156,13 @@ export async function installStrata({ ownerApproved = false, platform = process.
     if (typeof version?.stdout !== "string" || !/\b0\.2\.17\b/.test(version.stdout)) fail("strata_version_mismatch");
     // The upstream updater verifies its signed feed and each engine manifest.
     // No model weights are acquired; engine selection follows the GPU/driver.
+    if (onStage) await onStage("installing_cuda_engine");
     await safeCall(invoke, py, [entry, "update", "--no-control", "--feed", config.feed, "--output", "json"], pythonEnv, bin, 1800000);
     const engineResult = await safeCall(invoke, py, [entry, "components", "engines", "--output", "json"], pythonEnv, bin, 30000);
     const engine = verifyStrataEngineInventory(engineResult.stdout, config);
     await writeFile(stateFile, JSON.stringify({ schema: 1, status: "ready", version: config.app_version, control: config.control_version,
       engine, feed: config.feed, script_sha256: config.script.sha256, at: now().toISOString() }) + "\n", { mode: 0o600 });
+    if (onStage) await onStage("ready");
     return { status: "installed", version: config.app_version, control_version: config.control_version, engine, location: installRoot };
   } catch (error) {
     // Remove only this attempt's new KTK tree; never touch an existing Strata
