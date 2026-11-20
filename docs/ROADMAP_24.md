@@ -2,6 +2,8 @@
 
 **Дата:** 20.11.2026. **Статус:** план утверждён. Архитектура и отдельный репозиторий оформлены; MCP-исходник реализуется поэтапно. Автоматический Windows SCM/ACL и прогон единого Setup.exe пройдены в CI, но реальная Windows владельца и облачная активация ещё не тестировались. Отмечать [x] только после проверки фактического результата.
 
+**Обновление 20.11: 0.18.3 / Worker v14.** [PR #35](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/35) MERGED, [Edge CI](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44720567960) 111/111 PASS, [Windows CI](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44720567982) 5/5 PASS. Cloudflare v14 version `480909f2-0926-4302-b7f1-f98a179952fb`, deployment `db2cb94a-1843-4ef4-aed1-64f9deebc32d`, 100%; откат v13 version `bb72da90-7be8-482f-a585-cd0e51c33b06`. Открытие страницы новой привязки без кодов в браузере владельца и end-to-end ещё не подтверждено; пункт 18 открыт.
+
 ## Этап I. Подготовка проекта (1–4)
 - [x] **1. Зафиксировать архитектуру.** Один MCP-сервер на Windows друга, без отдельного Windows-агента/второй учётной записи. Сообщить конкретные ограничения служб и удалённого доступа.
 - [x] **2. Оформить отдельный исходник.** Приватный `vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs`, версии, README, план, тесты, HANDOFF.md, механизм отката.
