@@ -38,7 +38,7 @@ jobs:
           cd .generated/packages
           sha256sum --check KTK-Windows-MCP-0.16.1-win-x64.zip.sha256
           unzip -t KTK-Windows-MCP-0.16.1-win-x64.zip
-          unzip -p KTK-Windows-MCP-0.16.1-win-x64.zip MANIFEST.json | node -e 'let x="";process.stdin.on("data",c=>x+=c);process.stdin.on("end",()=>{const m=JSON.parse(x);if(m.ready_for_installation!==false||m.source_commit!==process.env.SOURCE_COMMIT||m.files.length<28||m.executables.length!==3)process.exit(1)})'
+          unzip -p KTK-Windows-MCP-0.16.1-win-x64.zip MANIFEST.json | node -e 'let x="";process.stdin.on("data",c=>x+=c);process.stdin.on("end",()=>{const m=JSON.parse(x);if(m.ready_for_installation!==false||m.source_commit!==process.env.SOURCE_COMMIT||m.files.length<29||m.executables.length!==3)process.exit(1)})'
       - name: Save Windows staged candidate (not production-ready)
         uses: actions/upload-artifact@v4
         with:
