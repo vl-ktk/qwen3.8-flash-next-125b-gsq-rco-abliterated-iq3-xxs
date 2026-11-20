@@ -54,3 +54,17 @@ test("step16 device identity is written exclusively to protected destination", a
   assert.doesNotMatch(script, /process\.stdout\.write\([^;]*private_pkcs8/);
   assert.ok(root.endsWith("/"));
 });
+
+test("step16 enrollment activates only after owner approval, self-test and live Tunnel edge connection", async () => {
+  const activate = await load("../../scripts/Activate-KTKMCP.ps1");
+  assert.match(activate, /Enroll-KTKMCP\.mjs/);
+  assert.match(activate, /SelfTest-KTKMCP\.mjs/);
+  assert.match(activate, /emergency\.lock/);
+  assert.match(activate, /cloudflared_tunnel_ha_connections/);
+  assert.match(activate, /start= delayed-auto/);
+  assert.match(activate, /start= demand/);
+  assert.match(activate, /existing_enrollment_requires_repair_step_17/);
+  assert.doesNotMatch(activate, /(?:--token\s+ey|TUNNEL_TOKEN\s*=|Write-Output.*gateway_key)/i);
+  const tunnel = await load("../../config/KTKQwenTunnel.xml");
+  assert.match(tunnel, /--metrics 127\.0\.0\.1:20241/);
+});
