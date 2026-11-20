@@ -41,10 +41,12 @@ jobs:
           const protectedResource = await get('/.well-known/oauth-protected-resource');
           assert.equal(protectedResource.response.status, 200);
           assert.equal(protectedResource.data?.resource, `${origin}/mcp`);
+          assert.ok(protectedResource.data?.scopes_supported?.includes('qwen:update'), 'new updater scope not advertised');
 
           const oauth = await get('/.well-known/oauth-authorization-server');
           assert.equal(oauth.response.status, 200);
           assert.equal(oauth.data?.issuer, origin);
+          assert.ok(oauth.data?.scopes_supported?.includes('qwen:update'), 'OAuth update scope missing');
 
           const unauthenticatedMcp = await get('/mcp');
           assert.equal(unauthenticatedMcp.response.status, 401, 'MCP must deny anonymous callers');
@@ -64,5 +66,19 @@ jobs:
           assert.doesNotMatch(pairingPage.body, /Код \(10 символов\)|Отпечаток ключа \(16 символов\)/);
           assert.doesNotMatch(pairingPage.body, /QWEN_MCP_GATEWAY_KEY|QWEN_TUNNEL_TOKEN/);
 
-          console.log('Live public HTTP/OAuth/pairing-page smoke PASS. Tunnel and Windows MCP NOT tested.');
+          // GitHub Actions artifacts expire; verify the permanent public
+          // update asset can be fetched anonymously, bytes streamed and hashed.
+          // Never submit a live update to the owner's Windows machine here.
+          const release = 'https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/releases/download/ktk-update-v0.18.8/KTK-Update-0.18.8.zip';
+          const file = await fetch(release, { redirect: 'follow', signal: AbortSignal.timeout(180000) });
+          assert.equal(file.status, 200, 'public release not downloadable without GitHub authentication');
+          assert.ok(file.body, 'release asset missing body');
+          const { createHash } = await import('node:crypto');
+          const sha = createHash('sha256');
+          let size = 0;
+          for await (const chunk of file.body) { size += chunk.length; sha.update(chunk); }
+          assert.ok(size > 60_000_000 && size < 160_000_000, 'release artifact size invalid');
+          assert.equal(sha.digest('hex'), '332f769d98ff68d0c95cbadf546181f0cc2ae6424eddfa36ae05be438c0c9448');
+
+          console.log('Live HTTPS, OAuth update scope, anonymous MCP denial, pairing page and permanent public release SHA256 PASS. Windows MCP/GPU NOT tested.');
           NODE
