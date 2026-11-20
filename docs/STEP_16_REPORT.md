@@ -1,6 +1,6 @@
 # Пункт 16 — подготовлена безопасная первая установка Windows (исходник)
 
-Дата: 20.11.2026. Основная версия до работ: `6bf18bbd99d78c528dd5bee20f698a252d22a469` (GitHub main, подтверждённая сравнением). Cloudflare production/ПК/Netcup не изменялись. Слияние PR и результаты GitHub CI указываются после их фактического получения.
+Дата: 20.11.2026. Основная версия до работ: `6bf18bbd99d78c528dd5bee20f698a252d22a469` (GitHub main, подтверждённая сравнением). **[PR #21](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/21) MERGED**, squash исходник `b5ef64ce2c2a6a6cab4864e180e01aef7cb02b6e`. Cloudflare production/ПК/Netcup не изменялись. Откат исходника — вернуть `main` к `6bf18bbd99d78c528dd5bee20f698a252d22a469` отдельным согласованным revert PR; production Worker не выкладывался.
 
 ## Реализовано
 
@@ -19,8 +19,10 @@
 
 ## Проверки
 
-- Linux: unit-тесты packaging (mock vendored exe), SHA256 manifest, отсутствие секретов и дополнительный статический контракт установки/ACL/сервисов; `npm run check`, `npm test`, Wrangler dry-run.
-- GitHub Windows job дополнительно проверяет синтаксис PowerShell 5.1 и XML служб **без установки**; отдельный Ubuntu packaging job скачивает официальный WinSW exe и проверяет SHA256. Итоги указываются по реальному CI, а не заранее.
+- Linux: **98/98** тестов PASS, `npm run check` PASS, Wrangler dry-run PASS; unit-тесты packaging используют mock vendored exe, SHA256 manifest и статический контракт установки/ACL/сервисов.
+- **[GitHub Edge CI #44697700632](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44697700632) SUCCESS** — сборка/check/tests.
+- **[GitHub Windows candidate CI #44697700556](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44697700556) SUCCESS** — 3 job: Ubuntu скачал и проверил по SHA256 официальные Node/cloudflared/WinSW, собрал и проверил ZIP; Windows проверил парсер PowerShell 5.1 и оба XML; ещё один Windows job распаковал ZIP и успешно выполнил не повышающий права `Install-KTKMCP.ps1 -CheckOnly` **без установки**.
+- Временный GitHub Actions artifact `KTK-Windows-MCP-step16-4`, ID `14612000386`, размер внешней обёртки 61 539 858 байт, expires 27.11.2026 07:49 UTC; digest внешней обёртки `sha256:bdbe0c3f96fc17ec68df5a9754e4ab6d0f42368c3f5a99a2e8e7f8d33de5ea86` **не является SHA внутреннего ZIP**. Это тестовый кандидат, не отдавать другу.
 - Исполнение установки на настоящей Windows **не проводилось**. Никакой реальный `/healthz`, UAC или SCM PASS не заявляется.
 
 ## Источники
