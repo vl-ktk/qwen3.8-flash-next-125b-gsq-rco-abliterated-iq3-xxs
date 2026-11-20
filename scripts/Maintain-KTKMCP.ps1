@@ -173,7 +173,8 @@ elseif ($Action -ne 'Rollback') { throw 'installation_root_missing' }
 Assert-OrdinaryDirectory $data
 Assert-OrdinaryDirectory (Join-Path $data 'state')
 Assert-OwnedServices $root
-if (-not $UpdaterApproved -and $Action -in @('Update','Repair') -and (Test-Path -LiteralPath $previous)) { throw 'previous_version_exists_rollback_first' }
+$approvedRollingUpdate = $Action -eq 'Update' -and $Resume -and ($InstallerApproved -or $UpdaterApproved)
+if (-not $approvedRollingUpdate -and $Action -in @('Update','Repair') -and (Test-Path -LiteralPath $previous)) { throw 'previous_version_exists_rollback_first' }
 if ($Action -eq 'Rollback') { Assert-OrdinaryDirectory $previous }
 if ($Action -in @('Update','Repair')) {
     $oldManifest = Get-Content -LiteralPath (Join-Path $root 'MANIFEST.json') -Raw | ConvertFrom-Json
@@ -204,15 +205,15 @@ if ($Action -eq 'Uninstall') {
     if (Test-Path -LiteralPath $previous) { Assert-NoLinks $previous }
 }
 
-if ($UpdaterApproved -and (Test-Path -LiteralPath $previous)) {
-    # The current live version passed enrollment/SCM preconditions above.
-    # Retain exactly one rolling rollback: after validating the old backup,
-    # discard it immediately before the next verified update transaction.
+$rotatePrevious = $approvedRollingUpdate -and (Test-Path -LiteralPath $previous)
+if ($rotatePrevious) {
+    # Both the owner-run Setup and the restricted updater may rotate one
+    # existing rollback, but only after proving the current MCP is enrolled,
+    # both services are running, and the old backup is a verified KTK package.
     Assert-OrdinaryDirectory $previous
     Assert-NoLinks $previous
     & (Join-Path $previous 'Verify-KTKPackage.ps1') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'previous_package_verification_failed' }
-    Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop
 }
 
 # Fail closed on interrupted maintenance, regardless of whether services stop.
@@ -260,6 +261,11 @@ try {
         foreach ($name in @('KTKQwenMCP','KTKQwenTunnel')) { Copy-Item -LiteralPath (Join-Path $stage ('services\' + $name + '.xml')) -Destination (Join-Path $stage ($name + '.xml')) }
         Set-DeviceXml $stage
         Set-CodeAcl $stage
+        if ($rotatePrevious) {
+            # Only now is the replacement staged and verified. Clear the older
+            # rollback so the currently running version becomes the new one.
+            Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop
+        }
         [IO.Directory]::Move($root, $previous)
         $oldMoved = $true
         [IO.Directory]::Move($stage, $root)
