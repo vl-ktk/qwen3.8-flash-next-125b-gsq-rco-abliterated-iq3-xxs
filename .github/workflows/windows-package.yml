@@ -58,7 +58,7 @@ jobs:
         with:
           node-version: "24"
       - name: Strata installer contracts on native Windows (offline mocks)
-        run: node --test src/windows/strata-installer.test.mjs src/windows/sc117-model.test.mjs
+        run: node --test src/windows/strata-installer.test.mjs src/windows/sc117-model.test.mjs src/windows/sc117-inference.test.mjs
       - name: Parse Windows PowerShell 5.1 and service XML (no execution)
         shell: powershell
         run: |
@@ -104,6 +104,11 @@ jobs:
         run: |
           $plan = & 'candidate/extracted/bin/node.exe' 'candidate/extracted/Prepare-KTKSC117.mjs' --plan | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $plan.status -ne 'planned_no_changes' -or $plan.quantization -ne 'IQ3_XXS' -or $plan.number_of_files -ne 6) { throw 'Bundled SC117 plan failed' }
+      - name: Bundled SC117 offline inference plan resolves its runtime
+        shell: powershell
+        run: |
+          $plan = & 'candidate/extracted/bin/node.exe' 'candidate/extracted/Test-KTKSC117.mjs' --plan | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $plan.status -ne 'planned_no_changes' -or $plan.endpoint -ne 'http://127.0.0.1:18764' -or $plan.concurrency.parallel -ne 1) { throw 'Bundled SC117 inference plan failed' }
   windows-real-scm-offline:
     needs: windows-payload
     runs-on: windows-latest
