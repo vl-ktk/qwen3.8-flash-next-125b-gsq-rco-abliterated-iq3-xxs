@@ -1,6 +1,6 @@
 # Пункт 15 — проверяемый Windows payload (до установщика)
 
-Дата: 20.11.2026. Исходник: `feature/step15-windows-payload` на базе `main` `d2410eeb12a078d55e574ec2a40cb345ee7f8d99`.
+Дата: 20.11.2026. Исходник: `main`, [PR #19](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/19) MERGED, squash `e8031b700e189aed0f32cf64f3c934e0828c36f7`. Базовая версия для отката: `d2410eeb12a078d55e574ec2a40cb345ee7f8d99`.
 
 ## Сделано в исходнике
 
@@ -28,8 +28,10 @@
 ## Проверки и граница пункта 15
 
 - Linux: `npm test` **95/95 PASS**; `npm run check` PASS; `npm run build` Wrangler dry-run PASS. Unit tests пакета проверили воспроизводимый байт-в-байт ZIP на фиктивных бинарниках, отсутствие секретов/тестов, хеши всех файлов, ошибочный vendor SHA, отсутствие файла, symlink и отказ при перезаписи.
-- Реальные Windows `node.exe`/`cloudflared.exe`: только автоматическая сборка GitHub сможет скачать и проверить их; локальный Linux-тест подменяет их фиктивными файлами **только внутри теста**. Результат workflow указать после GitHub CI.
+- **[GitHub CI #44694483979](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44694483979) SUCCESS** — npm ci/check, 95/95 тестов и Wrangler dry-run.
+- **[GitHub Windows payload #44694484076](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44694484076) SUCCESS** — скачаны реальные официальные exe, сверены оба vendor SHA-256, собран ZIP, проверены архив и его checksum, временный GitHub artifact `KTK-Windows-MCP-step15-1` (ID `14610221533`, размер 53 807 146 байт). SHA-256 **внутреннего ZIP**: `f80fac8d547c5a5dde5f057a60b138dc82a20c46fd07f8060a5caca41a09a943`. Artifacts доступны владельцу приватного репозитория до **27.11.2026 07:22 UTC**; затем истекают и могут быть пересобраны из зафиксированных исходников. GH Actions digest внешней обёртки отличается от SHA внутреннего ZIP.
+- Локальный Linux-тест подменяет exe фиктивными файлами **только внутри unit-теста**, но отдельный реальный GitHub release job теперь успешно проверил именно скачанные vendor exe.
 - **Не готово для конечного пользователя:** автоматический `Setup.exe`, UAC, NTFS ACL, сервис LocalService, защита хранилища, Cloudflare gateway key, Tunnel bootstrap, одноразовая pairing, откат. Это пункты 16–18. Содержимое архива явно помечено `ready_for_installation: false`; запускать на ПК нельзя.
 - До Windows-приёмки пункт 15 в дорожной карте остаётся [ ]. Рабочий Cloudflare v11, Windows владельца/друга и Netcup не трогались. Предыдущая версия исходников для отката: `d2410eeb12a078d55e574ec2a40cb345ee7f8d99`.
 
-GitHub PR/CI/артефакт: дополнить после запуска проверки.
+Номер исходника и прямые отчёты GitHub приведены выше. **Полноценный `Setup.exe` и Windows-приёмка пока отсутствуют.**
