@@ -30,6 +30,20 @@ $temp = Join-Path $directory ('consent-' + [guid]::NewGuid().ToString('N') + '.t
 [IO.File]::WriteAllText($temp, $body, (New-Object System.Text.UTF8Encoding($false)))
 if (Test-Path -LiteralPath $target) { [IO.File]::Replace($temp, $target, $null) }
 else { [IO.File]::Move($temp, $target) }
+# /grant:r only replaces entries for the specified principals; it does NOT
+# remove other explicit grants retained by File.Replace from a legacy file.
+# Reset the inherited DACL first, then build a protected SYSTEM/Admin-only DACL.
+& icacls.exe $target '/reset' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'local_ai_consent_marker_acl_reset_failed' }
 & icacls.exe $target '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'local_ai_consent_marker_acl_failed' }
+$finalAcl = Get-Acl -LiteralPath $target
+if (-not $finalAcl.AreAccessRulesProtected) { throw 'local_ai_consent_marker_acl_untrusted' }
+foreach ($ace in $finalAcl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+        $ace.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544')) { throw 'local_ai_consent_marker_acl_untrusted' }
+}
+# After closing any legacy write access, ensure the protected file contains
+# exactly the owner's intended consent state, not bytes written in a race.
+[IO.File]::WriteAllText($target, $body, (New-Object System.Text.UTF8Encoding($false)))
 Write-Output $(if ($enabled) { 'KTK local AI future updates approved.' } else { 'KTK local AI future updates disabled.' })

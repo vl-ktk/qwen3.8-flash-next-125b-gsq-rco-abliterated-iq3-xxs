@@ -19,17 +19,25 @@ if ($manifest.schema -ne 1 -or $manifest.package_version -cne $Version -or $mani
 $optInFile = Join-Path $env:ProgramData 'KTK\Updater\local-ai-opt-in.json'
 $doLocalAI = $false
 if (Test-Path -LiteralPath $optInFile) {
-    if (-not (Test-Path -LiteralPath $optInFile -PathType Leaf) -or
-        ([IO.File]::GetAttributes($optInFile) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'unified_update_local_ai_marker_untrusted' }
-    $acl = Get-Acl -LiteralPath $optInFile
-    if (-not $acl.AreAccessRulesProtected) { throw 'unified_update_local_ai_acl_untrusted' }
-    foreach ($ace in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-        if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
-            $ace.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544')) { throw 'unified_update_local_ai_acl_untrusted' }
+    try {
+        if (-not (Test-Path -LiteralPath $optInFile -PathType Leaf) -or
+            ([IO.File]::GetAttributes($optInFile) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'unified_update_local_ai_marker_untrusted' }
+        $acl = Get-Acl -LiteralPath $optInFile
+        if (-not $acl.AreAccessRulesProtected) { throw 'unified_update_local_ai_acl_untrusted' }
+        foreach ($ace in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+            if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+                $ace.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544')) { throw 'unified_update_local_ai_acl_untrusted' }
+        }
+        $optIn = Get-Content -LiteralPath $optInFile -Raw | ConvertFrom-Json
+        if ($optIn.schema -ne 1 -or $optIn.enabled -isnot [bool]) { throw 'unified_update_local_ai_marker_invalid' }
+        $doLocalAI = $optIn.enabled
+    } catch {
+        # A malformed, inaccessible, linked or writable opt-in can NEVER
+        # authorize Strata/77-GB model work. Treat it as NO CONSENT while
+        # still allowing the separately authorized MCP-only upgrade.
+        $doLocalAI = $false
+        Write-Output 'KTK_LOCAL_AI_OPT_IN_IGNORED_MCP_ONLY'
     }
-    $optIn = Get-Content -LiteralPath $optInFile -Raw | ConvertFrom-Json
-    if ($optIn.schema -ne 1 -or $optIn.enabled -isnot [bool]) { throw 'unified_update_local_ai_marker_invalid' }
-    $doLocalAI = $optIn.enabled
 }
 if ($doLocalAI) {
 # Abort before touching the running MCP if the explicitly opted-in AI owner

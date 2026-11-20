@@ -47,6 +47,21 @@ test("remote MCP updates never start local model download without completed owne
   assert.match(unified, /KTK_MCP_UPDATE_ONLY/);
 });
 
+test("untrusted local AI consent never blocks an authorized MCP-only update", () => {
+  // Live 0.18.13 acceptance found a pre-existing opt-in ACL that the old
+  // elevated writer did not fully normalize. An untrusted marker must NEVER
+  // be interpreted as model-download consent, but must not brick MCP updates.
+  assert.match(unified, /if \(Test-Path -LiteralPath \$optInFile\) \{\s*try \{/);
+  assert.match(unified, /unified_update_local_ai_acl_untrusted/);
+  assert.match(unified, /catch \{[\s\S]*?\$doLocalAI = \$false\s*Write-Output 'KTK_LOCAL_AI_OPT_IN_IGNORED_MCP_ONLY'/);
+  assert.match(unified, /if \(\$doLocalAI\) \{[\s\S]*?KTK_USER_UPDATE_QUEUED/);
+  assert.match(unified, /\} else \{\s*Write-Output 'KTK_MCP_UPDATE_ONLY'/);
+  assert.match(consent, /icacls\.exe \$target '\/reset'/);
+  assert.match(consent, /\$finalAcl = Get-Acl -LiteralPath \$target/);
+  assert.match(consent, /\$ace\.IdentityReference\.Value -notin @\('S-1-5-18','S-1-5-32-544'\)/);
+  assert.match(windowsCi, /Injected untrusted local AI grant was not removed/);
+});
+
 test("one-click approval cannot enable unrelated maintenance operations", () => {
   assert.match(maintenance, /\$InstallerApproved -and \(\$Action -ne 'Update' -or -not \$Resume -or \$CheckOnly\)/);
   assert.match(maintenance, /if \(-not \$UpdaterApproved -and -not \[Environment\]::UserInteractive\)/);
