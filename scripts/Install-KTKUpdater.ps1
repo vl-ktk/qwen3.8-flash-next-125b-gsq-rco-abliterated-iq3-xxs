@@ -18,13 +18,81 @@ $root = Join-Path $env:ProgramFiles 'KTK\Updater'
 $data = Join-Path $env:ProgramData 'KTK\Updater'
 $gateway = Join-Path $env:ProgramData 'KTK\QwenMCP\secrets\gateway.key'
 if (-not (Test-Path -LiteralPath $gateway -PathType Leaf)) { throw 'updater_requires_enrolled_mcp' }
+function Assert-OwnedUpdaterDirectory([string]$Folder) {
+    if (-not (Test-Path -LiteralPath $Folder -PathType Container) -or
+        ([IO.File]::GetAttributes($Folder) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'updater_directory_untrusted' }
+    foreach ($item in (Get-ChildItem -LiteralPath $Folder -Recurse -Force)) {
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'updater_link_untrusted' }
+    }
+    foreach ($needed in @('KTKQwenUpdater.exe','KTKQwenUpdater.xml','bin\node.exe','runtime\remote-update.mjs','runtime\Run-KTKUpdater.mjs','Run-KTKRemoteUpdate.ps1')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Folder $needed) -PathType Leaf)) { throw 'updater_directory_incomplete' }
+    }
+}
+function Assert-UpdaterReady {
+    $ready = $false
+    for ($i=0; $i -lt 20; $i++) {
+        if ((Get-Service -Name 'KTKQwenUpdater' -ErrorAction Stop).Status -ne 'Running') { break }
+        $tcp = New-Object Net.Sockets.TcpClient
+        try {
+            $attempt = $tcp.BeginConnect('127.0.0.1', 18765, $null, $null)
+            if ($attempt.AsyncWaitHandle.WaitOne(1000)) { $tcp.EndConnect($attempt); $ready = $true; break }
+        } catch { } finally { $tcp.Close() }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $ready) { throw 'updater_health_failed' }
+}
 $existing = Get-CimInstance -ClassName Win32_Service -Filter "Name='KTKQwenUpdater'"
 if ($existing) {
     $expected = Join-Path $root 'KTKQwenUpdater.exe'
     if ($existing.PathName.Trim().Trim('"') -ine $expected -or $existing.StartName -notmatch 'LocalSystem$' -or
         -not (Test-Path -LiteralPath (Join-Path $root 'runtime\remote-update.mjs') -PathType Leaf)) { throw 'updater_existing_service_not_owned' }
-    if ($existing.State -ne 'Running') { Start-Service -Name 'KTKQwenUpdater' -ErrorAction Stop }
-    Write-Output 'KTK updater already installed, no overwrite.'
+    Assert-OwnedUpdaterDirectory $root
+    $previous = Join-Path $env:ProgramFiles 'KTK\Updater.previous'
+    if (Test-Path -LiteralPath $previous) { Assert-OwnedUpdaterDirectory $previous }
+    $stage = Join-Path $env:ProgramFiles ('KTK\Updater.stage-' + [guid]::NewGuid().ToString('N'))
+    $failed = Join-Path $env:ProgramFiles ('KTK\Updater.failed-' + [guid]::NewGuid().ToString('N'))
+    $moved = $false
+    try {
+        # Stage and lock down the complete verified replacement BEFORE taking
+        # the currently working SYSTEM updater offline.
+        New-Item -ItemType Directory -Path (Join-Path $stage 'runtime') -Force -ErrorAction Stop | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $stage 'bin') -Force -ErrorAction Stop | Out-Null
+        foreach ($file in @('remote-update.mjs','origin-auth.mjs','Run-KTKUpdater.mjs')) {
+            Copy-Item -LiteralPath (Join-Path $source ('runtime\' + $file)) -Destination (Join-Path $stage ('runtime\' + $file)) -ErrorAction Stop
+        }
+        Copy-Item -LiteralPath (Join-Path $source 'bin\node.exe') -Destination (Join-Path $stage 'bin\node.exe') -ErrorAction Stop
+        Copy-Item -LiteralPath (Join-Path $source 'bin\WinSW.exe') -Destination (Join-Path $stage 'KTKQwenUpdater.exe') -ErrorAction Stop
+        Copy-Item -LiteralPath (Join-Path $source 'services\KTKQwenUpdater.xml') -Destination (Join-Path $stage 'KTKQwenUpdater.xml') -ErrorAction Stop
+        Copy-Item -LiteralPath (Join-Path $source 'Run-KTKRemoteUpdate.ps1') -Destination (Join-Path $stage 'Run-KTKRemoteUpdate.ps1') -ErrorAction Stop
+        & icacls.exe $stage '/T' '/C' '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'updater_code_acl_failed' }
+        Assert-OwnedUpdaterDirectory $stage
+        Stop-Service -Name 'KTKQwenUpdater' -ErrorAction Stop
+        (Get-Service -Name 'KTKQwenUpdater').WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+        if (Test-Path -LiteralPath $previous) { Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop }
+        [IO.Directory]::Move($root, $previous)
+        $moved = $true
+        [IO.Directory]::Move($stage, $root)
+        Start-Service -Name 'KTKQwenUpdater' -ErrorAction Stop
+        Assert-UpdaterReady
+        Write-Output 'KTK updater upgraded and healthy. Previous code kept for rollback.'
+    } catch {
+        $failure = $_
+        if ($moved) {
+            try { Stop-Service -Name 'KTKQwenUpdater' -ErrorAction SilentlyContinue } catch { }
+            try { (Get-Service -Name 'KTKQwenUpdater').WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) } catch { }
+            if (Test-Path -LiteralPath $root) { [IO.Directory]::Move($root, $failed) }
+            [IO.Directory]::Move($previous, $root)
+        }
+        try {
+            Start-Service -Name 'KTKQwenUpdater' -ErrorAction Stop
+            Assert-UpdaterReady
+            Write-Output 'KTK_UPDATER_RECOVERY_OK'
+        } catch { Write-Output 'KTK_UPDATER_RECOVERY_FAILED' }
+        throw $failure
+    } finally {
+        if (Test-Path -LiteralPath $stage -PathType Container) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
+    }
     return
 }
 if ((Test-Path -LiteralPath $root) -or (Test-Path -LiteralPath $data)) { throw 'unrecognized_updater_directory' }

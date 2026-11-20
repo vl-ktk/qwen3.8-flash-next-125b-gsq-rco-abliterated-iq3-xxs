@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createOriginVerifier } from "./origin-auth.mjs";
-import { validateUpdateOffer, signUpdateRequest, createUpdaterServer, callLocalUpdater, downloadVerifiedRelease, applyVerifiedRelease, runFixedUserTask } from "./remote-update.mjs";
+import { validateUpdateOffer, signUpdateRequest, createUpdaterServer, callLocalUpdater, downloadVerifiedRelease, applyVerifiedRelease, classifyUpdateFailure, runFixedUserTask } from "./remote-update.mjs";
 
 const key = randomBytes(32).toString("base64url");
 const bytes = Buffer.from("signed trusted release fixture");
@@ -157,6 +157,46 @@ test("local AI is only queued for a separately opted-in owner", async t => {
   }), /update_completion_unconfirmed/);
 });
 
+test("privileged errors have bounded stage codes and explicit rollback status, never raw logs", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "ktk-updater-errors-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const rootCause = new Error("raw C:\\secret\\path user credentials");
+  rootCause.stderr = "powershell exception\r\nKTK_UPDATE_FAILURE:maintenance:tunnel_health_failed\r\n";
+  rootCause.stdout = "Original files restored\r\nKTK_RECOVERY_LOCKED:mcp_selftest_failed\r\n";
+  assert.deepEqual(classifyUpdateFailure(rootCause), { code: "maintenance_tunnel_health_failed", recovery: "locked" });
+  assert.deepEqual(classifyUpdateFailure({ stderr: "arbitrary message", code: "ETIMEDOUT", killed: true }),
+    { code: "maintenance_timeout", recovery: "unknown" });
+  assert.deepEqual(classifyUpdateFailure({ stderr: "KTK_UPDATE_FAILURE:maintenance:secret/user" }),
+    { code: "maintenance_failed", recovery: "unknown" });
+  await assert.rejects(applyVerifiedRelease(offer, { updaterRoot: dir, dataRoot: dir,
+    download: async () => bytes.length, invoke: async () => { throw rootCause; },
+  }), error => error.code === "maintenance_tunnel_health_failed" && error.recovery === "locked" &&
+    !JSON.stringify(error).includes("credentials"));
+});
+
+test("authenticated status persists failure reason and rollback state", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "ktk-updater-failed-status-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const server = createUpdaterServer({ keyText: key, port: 0, updaterRoot: dir, dataRoot: dir,
+    apply: async () => { throw Object.assign(new Error("not returned"),
+      { code: "maintenance_mcp_selftest_failed", recovery: "healthy" }); },
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const port = server.address().port;
+  assert.equal((await callLocalUpdater("update", offer, { keyText: key, port })).status, "accepted");
+  let status;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    status = await callLocalUpdater("status", null, { keyText: key, port });
+    if (status.status === "failed") break;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(status.status, "failed");
+  assert.equal(status.code, "maintenance_mcp_selftest_failed");
+  assert.equal(status.recovery, "healthy");
+  assert.equal(JSON.parse(await readFile(path.join(dir, "status.json"), "utf8")).recovery, "healthy");
+});
+
 test("PowerShell privileged update uses SYSTEM gate and packaged maintenance, never arbitrary scripts", async () => {
   const script = await readFile(new URL("../../scripts/Run-KTKRemoteUpdate.ps1", import.meta.url), "utf8");
   const installer = await readFile(new URL("../../scripts/Install-KTKUpdater.ps1", import.meta.url), "utf8");
@@ -165,13 +205,18 @@ test("PowerShell privileged update uses SYSTEM gate and packaged maintenance, ne
   assert.match(script, /S-1-5-18/);
   assert.match(script, /ZipFile\]::OpenRead/);
   assert.match(script, /Apply-KTKUnifiedRelease\.ps1/);
+  assert.match(script, /KTK_UPDATE_FAILURE/);
   assert.match(unified, /-Action Update -PackagePath \$PackagePath -Resume -UpdaterApproved/);
   assert.match(unified, /local-ai-opt-in\.json/);
   assert.match(unified, /if \(\$doLocalAI\) \{/);
   assert.match(unified, /KTK_MCP_UPDATE_ONLY/);
   assert.match(unified, /KTKQwenUserUpdater/);
   assert.match(maintenance, /updater_approval_requires_localsystem_live_update/);
+  assert.match(maintenance, /KTK_RECOVERY_OK/);
+  assert.match(maintenance, /try \{\s*# Stopping services is part of the transaction:[\s\S]*?Set-ManualStopped/);
   assert.match(installer, /KTKQwenUpdater\.exe/);
   assert.match(installer, /updater_existing_service_not_owned/);
+  assert.match(installer, /KTK updater upgraded and healthy/);
+  assert.match(installer, /Assert-UpdaterReady/);
   assert.doesNotMatch(installer, /(?<![A-Za-z])Invoke-Expression|\biex\b|Set-ExecutionPolicy/i);
 });
