@@ -37,7 +37,7 @@ if (-not $env:ProgramFiles -or -not $env:ProgramData) { throw 'windows_paths_mis
 Assert-OrdinaryDirectory $source
 & (Join-Path $source 'Verify-KTKPackage.ps1') | Out-Null
 $manifest = Get-Content -LiteralPath (Join-Path $source 'MANIFEST.json') -Raw | ConvertFrom-Json
-if ($manifest.schema -ne 1 -or $manifest.target -cne 'windows-x64' -or $manifest.package_version -notmatch '^0\.16\.\d+$') { throw 'package_manifest_invalid' }
+if ($manifest.schema -ne 1 -or $manifest.target -cne 'windows-x64' -or $manifest.package_version -notmatch '^0\.17\.\d+$') { throw 'package_manifest_invalid' }
 foreach ($relative in @('bin','runtime','licenses','config','services')) { Assert-OrdinaryDirectory (Join-Path $source $relative) }
 
 $installRoot = Join-Path $env:ProgramFiles 'KTK\QwenMCP'
