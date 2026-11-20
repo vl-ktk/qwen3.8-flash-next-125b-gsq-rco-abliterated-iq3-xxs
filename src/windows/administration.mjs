@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
+import { readFile, stat } from "node:fs/promises";
 
 const execFileAsync = promisify(execFile);
 export const WINDOWS_SERVICE_NAME = "KTKQwenMCP";
@@ -20,6 +21,20 @@ const serviceState = text => {
   return value?.[1] === "1" ? "stopped" : value?.[1] === "4" ? "running" : "unknown";
 };
 
+// Read only the package manifest installed beside the bundled Node runtime.
+// Never trust a caller-supplied path or treat a running service as proof that
+// the installer/recovery configuration has been verified.
+export async function readInstalledPackageVersion({ executable = process.execPath, read = readFile, inspect = stat } = {}) {
+  try {
+    if (path.win32.basename(executable).toLowerCase() !== "node.exe" || path.win32.basename(path.win32.dirname(executable)).toLowerCase() !== "bin") return null;
+    const manifestPath = path.win32.join(path.win32.dirname(path.win32.dirname(executable)), "MANIFEST.json");
+    const entry = await inspect(manifestPath);
+    if (!entry.isFile() || entry.size > 1024 * 1024) return null;
+    const manifest = JSON.parse(await read(manifestPath, "utf8"));
+    return manifest?.schema === 1 && manifest?.target === "windows-x64" && /^0\.18\.\d+$/.test(manifest.package_version) ? manifest.package_version : null;
+  } catch { return null; }
+}
+
 export async function checkLocalHealth({ fetcher = fetch, port = 8765, timeoutMs = 2000 } = {}) {
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 5000) throw safeError("invalid_health_configuration");
   try {
@@ -33,7 +48,7 @@ export async function checkLocalHealth({ fetcher = fetch, port = 8765, timeoutMs
   } catch { return { status: "unavailable", reason: "health_unreachable" }; }
 }
 
-export async function getAdminStatus({ queryService, uptime = () => process.uptime(), now = () => new Date(), paired = false, health = null } = {}) {
+export async function getAdminStatus({ queryService, readPackageVersion = readInstalledPackageVersion, uptime = () => process.uptime(), now = () => new Date(), paired = false, health = null } = {}) {
   const checkedAt = now().toISOString();
   let service = { status: "unavailable" };
   if (typeof queryService === "function") {
@@ -47,12 +62,15 @@ export async function getAdminStatus({ queryService, uptime = () => process.upti
       }
     } catch { service = { status: "unavailable" }; }
   }
+  let installedVersion = null;
+  try { installedVersion = await readPackageVersion(); } catch { /* A failed read cannot establish installer state. */ }
+  if (typeof installedVersion !== "string" || !/^0\.18\.\d+$/.test(installedVersion)) installedVersion = null;
   return {
     checked_at: checkedAt,
     mcp: { status: health?.status ?? "not_checked", version: health?.version ?? null, source_version: WINDOWS_MCP_VERSION, uptime_seconds: Math.max(0, Math.floor(uptime())), local_identity_configured: Boolean(paired), cloud_pairing: "not_checked", model: "not_checked" },
     windows_service: service,
-    updates: { status: "installer_required", installed_version: null },
-    recovery: { status: "pending_installer", automatic_os_reboot: false },
+    updates: { status: installedVersion ? "installed" : "not_checked", installed_version: installedVersion },
+    recovery: { status: "not_checked", automatic_os_reboot: null },
   };
 }
 
