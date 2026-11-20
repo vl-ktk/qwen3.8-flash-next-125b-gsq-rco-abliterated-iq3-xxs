@@ -95,6 +95,51 @@ test("interrupted HTTP download resumes only with matching metadata and strict 2
   assert.equal(await exists(file + ".part"), false);
 });
 
+test("user cancellation preserves owned partial model bytes and its resume marker", async t => {
+  const root = await fixture(t);
+  const destination = path.join(root, "cancelled.gguf");
+  const body = "resume-after-cancel";
+  const encoded = new TextEncoder();
+  const fetchImpl = async () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoded.encode(body.slice(0, 7)));
+      controller.enqueue(encoded.encode(body.slice(7)));
+      controller.close();
+    },
+  }), { status: 200 });
+  await assert.rejects(downloadVerifiedSc117File({
+    destination, url: testUrl, asset: tiny(body), fetchImpl,
+    onProgress: received => {
+      if (received >= 7) throw Object.assign(new Error("localai_user_cancelled"), { code: "localai_user_cancelled" });
+    },
+  }), /localai_user_cancelled/);
+  assert.equal(await readFile(destination + ".part", "utf8"), body.slice(0, 7));
+  assert.equal(await exists(destination + ".download.json"), true);
+  assert.equal(await exists(destination), false);
+  const resume = async (_url, opts) => {
+    assert.equal(opts.headers.Range, "bytes=7-");
+    return new Response(body.slice(7), { status: 206,
+      headers: { "content-range": "bytes 7-" + (body.length - 1) + "/" + body.length } });
+  };
+  assert.equal((await downloadVerifiedSc117File({ destination, url: testUrl, asset: tiny(body), fetchImpl: resume })).status, "downloaded_verified");
+});
+
+test("cancellation aborts a stalled HTTPS fetch without waiting for the two-hour timeout", async t => {
+  const root = await fixture(t);
+  const destination = path.join(root, "stalled.gguf");
+  const controller = new AbortController();
+  const pending = downloadVerifiedSc117File({
+    destination, url: testUrl, asset: tiny("missing response"), signal: controller.signal,
+    fetchImpl: async (_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }),
+  });
+  setTimeout(() => controller.abort(Object.assign(new Error("localai_user_cancelled"), { code: "localai_user_cancelled" })), 10);
+  await assert.rejects(pending, /localai_user_cancelled/);
+  assert.equal(await exists(destination + ".part"), true);
+  assert.equal(await exists(destination + ".download.json"), true);
+});
+
 test("resumed downloads refuse full 200, wrong ranges, redirect to untrusted host", async t => {
   const root = await fixture(t);
   const text = "abcdefghij";

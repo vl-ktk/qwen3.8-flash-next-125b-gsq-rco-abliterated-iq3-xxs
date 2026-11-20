@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { assertLocalAiHardware, localAiSetupPlan, runLocalAiSetup } from "./local-ai-setup.mjs";
+import { assertLocalAiHardware, localAiCancelRequested, localAiSetupPlan, runLocalAiSetup } from "./local-ai-setup.mjs";
 
 const GIB = 2 ** 30;
 const inventory = async () => ({
@@ -45,6 +45,42 @@ test("read-only combined plan shows all five stages and retry behavior", () => {
   assert.equal(plan.interactive_user_required, true);
   assert.equal(plan.requires_explicit_installer_approval, true);
   assert.match(plan.result_report, /LocalAI\\result\.json$/);
+  assert.match(plan.cancellation, /safe_checkpoint/);
+});
+
+test("per-run cancellation token ignores stale requests and accepts only current run", async t => {
+  const f = await fixture(t);
+  assert.equal(await localAiCancelRequested(f.statusDir, "a".repeat(32)), false);
+  await writeFile(path.join(f.statusDir, "cancel-request.txt"), "a".repeat(32));
+  assert.equal(await localAiCancelRequested(f.statusDir, "b".repeat(32)), false);
+  assert.equal(await localAiCancelRequested(f.statusDir, "a".repeat(32)), true);
+  await writeFile(path.join(f.statusDir, "cancel-request.txt"), "x".repeat(200));
+  await assert.rejects(localAiCancelRequested(f.statusDir, "a".repeat(32)), /localai_cancel_request_untrusted/);
+});
+
+test("explicit cancellation stops before Strata/model and reports safely retained data", async t => {
+  const f = await fixture(t, { cancelRequested: async () => true });
+  await assert.rejects(runLocalAiSetup(f.opts), /localai_user_cancelled/);
+  assert.deepEqual(f.calls, ["lock", "unlock"]);
+  const result = JSON.parse(await readFile(path.join(f.statusDir, "result.json"), "utf8"));
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.code, "localai_user_cancelled");
+  assert.equal(result.retained, "verified_and_partial_artifacts");
+});
+
+test("cancel timer aborts stalled model download and never starts inference", async t => {
+  const f = await fixture(t, {
+    cancelRequested: async () => f.calls.includes("model"),
+    prepareModel: async ({ signal }) => {
+      f.calls.push("model");
+      return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    },
+  });
+  await assert.rejects(runLocalAiSetup(f.opts), /localai_user_cancelled/);
+  assert.deepEqual(f.calls, ["lock", "strata", "model", "unlock"]);
+  const result = JSON.parse(await readFile(path.join(f.statusDir, "result.json"), "utf8"));
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.phase, "model");
 });
 
 test("preflight tolerates actual 3090 Ti VRAM reporting but refuses unknown device", async () => {

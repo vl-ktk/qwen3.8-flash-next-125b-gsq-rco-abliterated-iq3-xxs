@@ -11,7 +11,7 @@
 [Setup]
 AppId={{F087E1C8-6597-4DE8-960B-38D903A6E3BE}
 AppName=KTK Qwen MCP (Acceptance Candidate)
-AppVersion=0.18.10
+AppVersion=0.18.11
 AppPublisher=KTK
 DefaultDirName={autopf}\KTK\QwenMCP
 CreateAppDir=no
@@ -25,7 +25,7 @@ DisableProgramGroupPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=no
 OutputDir={#OutputRoot}
-OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.10-TEST-UNSIGNED
+OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.11-TEST-UNSIGNED
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
@@ -39,6 +39,18 @@ Source: "{#SourceRoot}\*"; DestDir: "{tmp}\KTKPayload"; Flags: recursesubdirs cr
 [Code]
 var
   ApprovalOpened: Boolean;
+  InstallModePage: TInputOptionWizardPage;
+
+procedure InitializeWizard();
+begin
+  InstallModePage := CreateInputOptionPage(wpWelcome,
+    'Выбери режим установки', 'MCP работает без локальной модели',
+    'Модель Qwen 125B занимает около 77 ГБ и требует мощный ПК. ' +
+    'Установку Strata и модели можно запустить позже тем же Setup.exe.', True, False);
+  InstallModePage.Add('Только MCP (рекомендуется для слабого ПК)');
+  InstallModePage.Add('MCP + Strata + Qwen 125B (мощный ПК)');
+  InstallModePage.Values[0] := True;
+end;
 
 procedure KTKLog(const S: String; const Error, FirstLine: Boolean);
 var
@@ -90,6 +102,7 @@ var
   UserPowerShell: String;
   Updater: String;
   UserUpdater: String;
+  LocalAIConsent: String;
 begin
   if CurStep <> ssPostInstall then Exit;
   { Inno Setup 6 is a 32-bit installer: Sysnative resolves to native System32. }
@@ -125,13 +138,31 @@ begin
     if not ExecAsOriginalUser(UserPowerShell, Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
       RaiseException('Could not register non-elevated KTK user updater; run Setup from the normal Windows desktop.');
     if ExitCode <> 0 then RaiseException('KTK user updater setup incomplete; retry this installer.');
-    LocalAI := ExpandConstant('{tmp}\KTKPayload\Show-KTKLocalAI.ps1');
-    Args := '-NoProfile -ExecutionPolicy Bypass -File "' + LocalAI + '"';
-    WizardForm.StatusLabel.Caption := 'Установка Strata и Qwen 125B для текущего пользователя...';
-    { B/C/D may NEVER be run elevated as Administrator or as LocalService. }
-    if not ExecAsOriginalUser(UserPowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode) then
-      RaiseException('Could not start the local AI wizard as original user; run Setup normally, not via Run as administrator.');
-    if ExitCode <> 0 then
-      RaiseException('Local AI installation incomplete. Run this same Setup.exe again to retry; verified files are retained.');
+    { Opt-in is SYSTEM/Admin-owned. An incomplete AI attempt must never
+      schedule 77 GB on a later remote MCP-only update. }
+    LocalAIConsent := ExpandConstant('{tmp}\KTKPayload\Set-KTKLocalAIOptIn.ps1');
+    Args := '-NoProfile -ExecutionPolicy Bypass -File "' + LocalAIConsent + '" -Disable';
+    if not ExecAndLogOutput(PowerShell, Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode, @KTKLog) then
+      RaiseException('Could not disable automatic local AI work; Windows error ' + IntToStr(ExitCode));
+    if ExitCode <> 0 then RaiseException('Local AI opt-in safety gate failed.');
+    if InstallModePage.Values[1] then begin
+      LocalAI := ExpandConstant('{tmp}\KTKPayload\Show-KTKLocalAI.ps1');
+      Args := '-NoProfile -ExecutionPolicy Bypass -File "' + LocalAI + '"';
+      WizardForm.StatusLabel.Caption := 'Установка Strata и Qwen 125B для текущего пользователя...';
+      { B/C/D may NEVER be run elevated as Administrator or as LocalService. }
+      if not ExecAsOriginalUser(UserPowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode) then
+        RaiseException('Could not start the local AI wizard as original user; run Setup normally, not via Run as administrator.');
+      if ExitCode = 2 then
+        Log('KTK: Owner cancelled local AI safely; MCP remains installed.')
+      else if ExitCode <> 0 then
+        RaiseException('Local AI installation incomplete. Run this same Setup.exe again to retry; verified files are retained.')
+      else begin
+        Args := '-NoProfile -ExecutionPolicy Bypass -File "' + LocalAIConsent + '" -Enable';
+        if not ExecAndLogOutput(PowerShell, Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode, @KTKLog) then
+          RaiseException('Could not register local AI owner approval; Windows error ' + IntToStr(ExitCode));
+        if ExitCode <> 0 then RaiseException('Local AI opt-in registration failed.');
+      end;
+    end else
+      Log('KTK: Owner selected MCP only; no Strata or model installation started.');
   end;
 end;

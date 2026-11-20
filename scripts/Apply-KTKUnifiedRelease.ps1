@@ -1,5 +1,6 @@
 # Trusted, checksum-verified package entrypoint. Executed exclusively by the
-# fixed SYSTEM update helper. MCP first, then a non-elevated user update job.
+# fixed SYSTEM update helper. MCP always; user-scoped AI only if the owner
+# explicitly completed local AI acceptance and its protected opt-in is enabled.
 param([Parameter(Mandatory=$true)][string]$PackagePath,
       [Parameter(Mandatory=$true)][string]$Version)
 $ErrorActionPreference = 'Stop'
@@ -11,8 +12,28 @@ $manifestPath = Join-Path $PackagePath 'MANIFEST.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 if ($manifest.schema -ne 1 -or $manifest.package_version -cne $Version -or $manifest.target -cne 'windows-x64') { throw 'unified_update_manifest_invalid' }
 
-# Abort before touching the running MCP if no known, password-free user task
-# exists. Never register tasks under SYSTEM as the user's account.
+# A user task's existence is NOT consent to download ~77 GB. A protected
+# opt-in marker is written by the elevated Setup only after the local model
+# passed inference acceptance. No marker (including legacy 0.18.10) means
+# remote MCP-only update, never an automatic Strata/model download.
+$optInFile = Join-Path $env:ProgramData 'KTK\Updater\local-ai-opt-in.json'
+$doLocalAI = $false
+if (Test-Path -LiteralPath $optInFile) {
+    if (-not (Test-Path -LiteralPath $optInFile -PathType Leaf) -or
+        ([IO.File]::GetAttributes($optInFile) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'unified_update_local_ai_marker_untrusted' }
+    $acl = Get-Acl -LiteralPath $optInFile
+    if (-not $acl.AreAccessRulesProtected) { throw 'unified_update_local_ai_acl_untrusted' }
+    foreach ($ace in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $ace.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544')) { throw 'unified_update_local_ai_acl_untrusted' }
+    }
+    $optIn = Get-Content -LiteralPath $optInFile -Raw | ConvertFrom-Json
+    if ($optIn.schema -ne 1 -or $optIn.enabled -isnot [bool]) { throw 'unified_update_local_ai_marker_invalid' }
+    $doLocalAI = $optIn.enabled
+}
+if ($doLocalAI) {
+# Abort before touching the running MCP if the explicitly opted-in AI owner
+# has no known password-free user task. SYSTEM never impersonates that user.
 $taskName = 'KTKQwenUserUpdater'
 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if (-not $task -or @($task.Actions).Count -ne 1 -or
@@ -52,11 +73,13 @@ if (Test-Path -LiteralPath $release) {
     & icacls.exe $release '/T' '/C' '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:RX' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'unified_update_release_acl_failed' }
 }
+}
 
-# Verified user payload is retained for a logged-out user's next session.
-# The live MCP transaction still gets its normal health gate and rollback.
+# The live MCP transaction always gets its normal health gate and rollback.
 & (Join-Path $PackagePath 'Maintain-KTKMCP.ps1') -Action Update -PackagePath $PackagePath -Resume -UpdaterApproved
 
+if ($doLocalAI) {
+# Verified user payload is retained for a logged-out opted-in user's next session.
 $job = @{schema=1;version=$Version;attempt=[guid]::NewGuid().ToString('N');manifest_sha256=(Get-FileHash -LiteralPath (Join-Path $release 'MANIFEST.json') -Algorithm SHA256).Hash.ToLowerInvariant()} | ConvertTo-Json -Compress
 $next = Join-Path $public ('job-' + [guid]::NewGuid().ToString('N') + '.tmp')
 [IO.File]::WriteAllText($next, $job)
@@ -69,3 +92,6 @@ if ($LASTEXITCODE -ne 0) { throw 'unified_update_job_acl_failed' }
 # A non-logged-in user means task is deferred to its next logon trigger.
 # Failure here never undoes the already healthy MCP or destroys model bytes.
 Write-Output 'KTK_USER_UPDATE_QUEUED'
+} else {
+    Write-Output 'KTK_MCP_UPDATE_ONLY'
+}

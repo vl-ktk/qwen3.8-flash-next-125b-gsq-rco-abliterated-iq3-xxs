@@ -1,5 +1,6 @@
 import { createServer } from "node:net";
-import { lstat, mkdir, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createWindowsToolRegistry } from "./windows-tools.mjs";
 import { strataInstallRoot, installStrata } from "./strata-installer.mjs";
@@ -18,7 +19,8 @@ export function localAiSetupPlan() {
     progress_report: "%LOCALAPPDATA%\\KTK\\LocalAI\\status.json",
     result_report: "%LOCALAPPDATA%\\KTK\\LocalAI\\result.json",
     on_failure: "retain_owned_verified_model_bytes_and_report_error_for_one_click_retry",
-    note: "Only --install --installer-approved performs changes. Setup.exe --OFFLINE skips live model installation.",
+    cancellation: "interactive_user_requested_at_safe_checkpoint; preserve_verified_and_partial_model_bytes",
+    note: "Only --install --installer-approved performs changes. Setup.exe defaults to MCP only; the user must explicitly select local AI.",
   };
 }
 
@@ -75,20 +77,42 @@ async function statusReporter(folder, { write = writeFile } = {}) {
   return { status: value => report("status.json", value), result: value => report("result.json", value) };
 }
 
+// A cancellation request is a per-run token, not an executable instruction.
+// Stale requests from previous attempts cannot cancel a new installation.
+export async function localAiCancelRequested(folder, runId) {
+  const file = path.join(folder, "cancel-request.txt");
+  const info = await lstat(file).catch(error => error?.code === "ENOENT" ? null : fail("localai_cancel_request_unavailable"));
+  if (!info) return false;
+  if (!info.isFile() || info.isSymbolicLink() || info.size > 128) fail("localai_cancel_request_untrusted");
+  return (await readFile(file, "utf8")).trim() === runId;
+}
+
 export async function runLocalAiSetup({ approved = false, platform = process.platform, arch = process.arch,
   localAppData = process.env.LOCALAPPDATA, statusDir = null, inventory = queryLocalAiPreflight,
   installRuntime = installStrata, prepareModel = prepareSc117Model, testInference = testSc117Inference,
   acquireLock = acquireLocalAiSetupLock, reportFactory = statusReporter,
+  cancelRequested = localAiCancelRequested,
   timeNow = () => Date.now() } = {}) {
   if (!approved) fail("localai_installer_approval_required");
   if (platform !== "win32" || arch !== "x64") fail("localai_windows_x64_required");
   const unlock = await acquireLock();
   let stage = "preflight";
   let reporter;
+  const runId = randomBytes(16).toString("hex");
   try {
     const folder = statusDir ?? await ensureStatusDirectory(localAppData);
     reporter = await reportFactory(folder);
-    const update = async (phase, percent, detail = null) => reporter.status({ status: "running", phase, percent, detail });
+    let lastCancelPoll = 0;
+    const checkCancellation = async (force = true) => {
+      const now = Date.now();
+      if (!force && now - lastCancelPoll < 250) return;
+      lastCancelPoll = now;
+      if (await cancelRequested(folder, runId)) fail("localai_user_cancelled");
+    };
+    const update = async (phase, percent, detail = null) => {
+      await reporter.status({ status: "running", run_id: runId, phase, percent, detail });
+      await checkCancellation();
+    };
     await reporter.result({ status: "running", phase: "preflight", code: "localai_in_progress" });
     await update("preflight", 1);
     const { pc, storage } = await inventory();
@@ -103,23 +127,45 @@ export async function runLocalAiSetup({ approved = false, platform = process.pla
 
     stage = "model";
     let lastReport = 0;
-    const model = await prepareModel({ approved: true, localAppData,
-      onStage: (name, detail) => update("sc117_" + name, name === "packing" ? 89 : name === "prepared" || name === "already_prepared" ? 93 : 24, detail ?? null),
-      onProgress: async ({ bytes_done, bytes_total, file_index, files_total }) => {
-        if (!Number.isSafeInteger(bytes_done) || !Number.isSafeInteger(bytes_total) || bytes_total <= 0) return;
-        const now = timeNow();
-        if (now - lastReport < 1000 && bytes_done < bytes_total) return;
-        lastReport = now;
-        await update("sc117_downloading", 24 + Math.floor(64 * Math.min(1, bytes_done / bytes_total)),
-          { bytes_done, bytes_total, file_index, files_total });
-      },
-    });
+    // Abort even a stalled HTTPS request with zero incoming chunks; never
+    // abruptly kill a model packer or an owned inference process.
+    const downloadAbort = new AbortController();
+    let pollingCancel = false;
+    const cancelTimer = setInterval(async () => {
+      if (pollingCancel || downloadAbort.signal.aborted) return;
+      pollingCancel = true;
+      try {
+        if (await cancelRequested(folder, runId))
+          downloadAbort.abort(Object.assign(new Error("localai_user_cancelled"), { code: "localai_user_cancelled" }));
+      } catch (error) { downloadAbort.abort(error); }
+      finally { pollingCancel = false; }
+    }, 350);
+    cancelTimer.unref();
+    let model;
+    try {
+      model = await prepareModel({ approved: true, localAppData, signal: downloadAbort.signal,
+        onStage: (name, detail) => update("sc117_" + name, name === "packing" ? 89 : name === "prepared" || name === "already_prepared" ? 93 : 24, detail ?? null),
+        onProgress: async ({ bytes_done, bytes_total, file_index, files_total }) => {
+          await checkCancellation(false);
+          if (!Number.isSafeInteger(bytes_done) || !Number.isSafeInteger(bytes_total) || bytes_total <= 0) return;
+          const now = timeNow();
+          if (now - lastReport < 1000 && bytes_done < bytes_total) return;
+          lastReport = now;
+          await update("sc117_downloading", 24 + Math.floor(64 * Math.min(1, bytes_done / bytes_total)),
+            { bytes_done, bytes_total, file_index, files_total });
+        },
+      });
+    } finally { clearInterval(cancelTimer); }
     if (!model?.root || !["prepared_for_inference_test", "already_prepared_not_rehashed"].includes(model.status)) fail("localai_model_incomplete");
     await update("sc117_ready", 93);
 
     stage = "inference";
     const tested = await testInference({ approved: true, modelRoot: model.root, localAppData,
-      onStage: name => update("inference_" + name, name === "verified" ? 99 : 95) });
+      // Inference owns its startup and graceful stop; never interrupt the stop
+      // callback even when the user has requested cancellation.
+      onStage: name => reporter.status({ status: "running", run_id: runId, phase: "inference_" + name,
+        percent: name === "verified" ? 99 : 95 }) });
+    await checkCancellation();
     if (tested?.status !== "inference_verified_and_stopped" || tested.inference_tested !== true) fail("localai_inference_not_verified");
     const result = { status: "passed", code: "localai_installed_tested", model: "SC117 IQ3_XXS",
       strata_version: "0.2.17", inference_verified: true, endpoint: "127.0.0.1:18764",
@@ -132,8 +178,10 @@ export async function runLocalAiSetup({ approved = false, platform = process.pla
     // B/C modules preserve their own retry markers, D owns its exact stop.
     const code = typeof error?.code === "string" ? error.code : "localai_unexpected_failure";
     if (reporter) {
-      await reporter.result({ status: "failed", phase: stage, code, retry: "rerun_same_setup_exe", retained: "verified_artifacts" });
-      await reporter.status({ status: "failed", phase: stage, percent: null, code });
+      const cancelled = code === "localai_user_cancelled";
+      await reporter.result({ status: cancelled ? "cancelled" : "failed", phase: stage, code,
+        retry: "rerun_same_setup_exe", retained: cancelled ? "verified_and_partial_artifacts" : "verified_artifacts" });
+      await reporter.status({ status: cancelled ? "cancelled" : "failed", phase: stage, percent: null, code });
     }
     throw Object.assign(new Error(code), { code });
   } finally {

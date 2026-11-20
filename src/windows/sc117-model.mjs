@@ -96,7 +96,7 @@ function assertDownloadResponse(response) {
 // This downloader writes only the named .part file. Interruption preserves it;
 // restart requires an exact matching state marker and HTTP 206 Content-Range.
 // Hash mismatch removes only the bad temporary file, never a user-provided GGUF.
-export async function downloadVerifiedSc117File({ asset, destination, url, fetchImpl = fetch, onProgress = null } = {}) {
+export async function downloadVerifiedSc117File({ asset, destination, url, fetchImpl = fetch, onProgress = null, signal = null } = {}) {
   if (!asset || typeof asset.bytes !== "number" || !Number.isSafeInteger(asset.bytes) || asset.bytes <= 0 || !HEX64.test(asset.sha256 ?? "") || !path.isAbsolute(destination)) fail("sc117_invalid_download_contract");
   const requestUrl = new URL(url);
   if (requestUrl.protocol !== "https:" || requestUrl.hostname !== "huggingface.co" || !requestUrl.pathname.startsWith(`/${SOURCE}/resolve/${REVISION}/`)) fail("sc117_asset_untrusted");
@@ -130,10 +130,15 @@ export async function downloadVerifiedSc117File({ asset, destination, url, fetch
   if (offset > asset.bytes) fail("sc117_partial_oversize");
   if (onProgress) await onProgress(offset);
   while (offset < asset.bytes) {
+    if (signal?.aborted) throw signal.reason?.code ? signal.reason : Object.assign(new Error("sc117_download_interrupted"), { code: "sc117_download_interrupted" });
     let response;
     try {
-      response = await fetchImpl(url, { redirect: "follow", headers: { "Range": `bytes=${offset}-`, "Accept-Encoding": "identity" }, signal: AbortSignal.timeout(2 * 60 * 60 * 1000) });
-    } catch { fail("sc117_download_interrupted"); }
+      response = await fetchImpl(url, { redirect: "follow", headers: { "Range": `bytes=${offset}-`, "Accept-Encoding": "identity" },
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(2 * 60 * 60 * 1000)]) : AbortSignal.timeout(2 * 60 * 60 * 1000) });
+    } catch {
+      if (signal?.aborted && signal.reason?.code) throw signal.reason;
+      fail("sc117_download_interrupted");
+    }
     assertDownloadResponse(response);
     if (!response?.ok || !response.body || (offset > 0 && response.status !== 206) || ![200, 206].includes(response.status)) fail("sc117_range_not_supported");
     const contentRange = response.headers?.get?.("content-range");
@@ -156,7 +161,8 @@ export async function downloadVerifiedSc117File({ asset, destination, url, fetch
       }
       await handle.sync();
     } catch (error) {
-      if (error?.code === "sc117_range_invalid") throw error;
+      if (signal?.aborted && signal.reason?.code) throw signal.reason;
+      if (error?.code === "sc117_range_invalid" || error?.code === "localai_user_cancelled") throw error;
       fail("sc117_download_interrupted");
     } finally { await handle.close(); }
     if (received !== allowed) fail("sc117_download_interrupted");
@@ -251,7 +257,7 @@ export async function verifySc117Packer(file, lock = modelLock) {
 export async function prepareSc117Model({ approved = false, platform = process.platform, arch = process.arch,
   localAppData = process.env.LOCALAPPDATA, getVolumes = fixedModelVolumes, root = null,
   strataRoot = null, downloadFile = downloadVerifiedSc117File, verifyPacker = verifySc117Packer, invoke = execFileAsync, lock = modelLock,
-  onStage = null, onProgress = null } = {}) {
+  onStage = null, onProgress = null, signal = null } = {}) {
   validateSc117Lock(lock);
   if (!approved) fail("sc117_owner_approval_required");
   if (platform !== "win32" || arch !== "x64") fail("sc117_windows_x64_required");
@@ -291,6 +297,7 @@ export async function prepareSc117Model({ approved = false, platform = process.p
   for (const [index, file] of lock.files.entries()) {
     if (onStage) await onStage("downloading", { file_index: index + 1, files_total: lock.files.length });
     await downloadFile({ asset: file, destination: sc117AssetLocation(chosenRoot, file, lock), url: sc117AssetUrl(file, lock),
+      signal,
       onProgress: onProgress ? async received => onProgress({ file_index: index + 1, files_total: lock.files.length,
         bytes_done: completedBytes + received, bytes_total: expectedBytes }) : null });
     completedBytes += file.bytes;

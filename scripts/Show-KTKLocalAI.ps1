@@ -50,24 +50,43 @@ $progress.Size = [System.Drawing.Size]::new(610, 23)
 $form.Controls.Add($progress)
 
 $note = New-Object System.Windows.Forms.Label
-$note.Text = 'Не выключай компьютер во время установки. После сбоя можно запустить этот же Setup ещё раз.'
+$note.Text = 'Можно отменить установку и дождаться безопасной остановки; частично загруженные файлы сохранятся.'
 $note.Location = [System.Drawing.Point]::new(20, 163)
 $note.Size = [System.Drawing.Size]::new(610, 31)
 $form.Controls.Add($note)
 
 $close = New-Object System.Windows.Forms.Button
-$close.Text = 'Ожидание...'
-$close.Enabled = $false
+$close.Text = 'Отменить'
+$close.Enabled = $true
 $close.Location = [System.Drawing.Point]::new(510, 204)
 $close.Size = [System.Drawing.Size]::new(120, 31)
-$close.Add_Click({ $form.Close() })
+$close.Add_Click({
+    if ($script:finished -or $null -eq $script:child -or $script:child.HasExited) {
+        $form.Close()
+    } elseif (-not $script:cancelRequested) {
+        $answer = [System.Windows.Forms.MessageBox]::Show(
+            'Отменить локальную установку? Уже загруженные части модели останутся для повторной попытки. MCP продолжит работать.',
+            'KTK Qwen 125B', [System.Windows.Forms.MessageBoxButtons]::YesNo)
+        if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+            $script:cancelRequested = $true
+            $close.Enabled = $false
+            $state.Text = 'Отмена запрошена. Ожидаем безопасного этапа остановки...'
+        }
+    }
+})
 $form.Controls.Add($close)
 
 $statusFile = Join-Path $env:LOCALAPPDATA 'KTK\LocalAI\status.json'
 $resultFile = Join-Path $env:LOCALAPPDATA 'KTK\LocalAI\result.json'
+$cancelFile = Join-Path $env:LOCALAPPDATA 'KTK\LocalAI\cancel-request.txt'
 $script:child = $null
 $script:successful = $false
+$script:cancelled = $false
 $script:finished = $false
+$script:cancelRequested = $false
+$script:cancelWritten = $false
+$script:activeRunId = $null
+$script:shownUtc = [DateTime]::UtcNow
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 750
 $timer.Add_Tick({
@@ -75,6 +94,10 @@ $timer.Add_Tick({
         try {
             $current = Get-Content -LiteralPath $statusFile -Raw | ConvertFrom-Json
             if ($current.status -eq 'running') {
+                if ($current.run_id -match '^[0-9a-f]{32}$' -and
+                    [DateTimeOffset]::Parse([string]$current.at).UtcDateTime -ge $script:shownUtc) {
+                    $script:activeRunId = [string]$current.run_id
+                }
                 if ($null -ne $current.percent) { $progress.Value = [Math]::Max(0, [Math]::Min(100, [int]$current.percent)) }
                 $state.Text = 'Этап: ' + [string]$current.phase
                 if ($null -ne $current.detail -and $null -ne $current.detail.bytes_total -and $current.detail.bytes_total -gt 0) {
@@ -86,16 +109,35 @@ $timer.Add_Tick({
         } catch { # Brief partial file write: read again at next tick.
         }
     }
+    if ($script:cancelRequested -and -not $script:cancelWritten -and $null -ne $script:activeRunId) {
+        try {
+            [IO.File]::WriteAllText($cancelFile, $script:activeRunId, (New-Object System.Text.UTF8Encoding($false)))
+            $script:cancelWritten = $true
+        } catch {
+            $state.Text = 'Не удалось запросить отмену; повторяем...'
+        }
+    }
+    if ($script:cancelRequested -and -not $script:finished -and $script:cancelWritten) {
+        $state.Text = 'Отмена запрошена. Дождись безопасной остановки установки.'
+    }
     if ($null -ne $script:child -and $script:child.HasExited -and -not $script:finished) {
         $script:finished = $true
         $timer.Stop()
         $result = $null
         try { $result = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json } catch { }
-        $script:successful = $script:child.ExitCode -eq 0 -and $null -ne $result -and $result.status -eq 'passed'
+        $freshResult = $false
+        try {
+            $freshResult = $null -ne $result -and [DateTimeOffset]::Parse([string]$result.at).UtcDateTime -ge $script:shownUtc
+        } catch { }
+        $script:successful = $script:child.ExitCode -eq 0 -and $freshResult -and $result.status -eq 'passed'
+        $script:cancelled = $script:child.ExitCode -ne 0 -and $freshResult -and $result.status -eq 'cancelled' -and $result.code -eq 'localai_user_cancelled'
         if ($script:successful) {
             $progress.Value = 100
             $state.Text = 'Готово! Strata, модель и тест генерации прошли проверку.'
             $note.Text = 'Результат: ' + $resultFile
+        } elseif ($script:cancelled) {
+            $state.Text = 'Локальная модель отменена по запросу. MCP продолжает работать.'
+            $note.Text = 'Частично загруженные файлы сохранены. Для продолжения снова запусти Setup и выбери модель.'
         } else {
             $code = if ($null -ne $result -and $result.status -eq 'failed') { [string]$result.code } else { 'localai_setup_unknown_failure' }
             $state.Text = 'Установка остановилась: ' + $code
@@ -107,6 +149,7 @@ $timer.Add_Tick({
 })
 $form.Add_Shown({
     try {
+        $script:shownUtc = [DateTime]::UtcNow
         $script:child = Start-Process -FilePath $node -ArgumentList @(('"' + $entry + '"'), '--install', '--installer-approved') -WorkingDirectory $payload -WindowStyle Hidden -PassThru
         $timer.Start()
     } catch {
@@ -120,7 +163,9 @@ $form.Add_FormClosing({
     param($sender, $eventArgs)
     if ($null -ne $script:child -and -not $script:child.HasExited) {
         $eventArgs.Cancel = $true
-        [System.Windows.Forms.MessageBox]::Show('Установка ещё работает. Дождись завершения, чтобы не повредить частично загруженные файлы.', 'KTK Qwen 125B') | Out-Null
+        if (-not $script:cancelRequested) {
+            [System.Windows.Forms.MessageBox]::Show('Для безопасной остановки нажми «Отменить» и дождись подтверждения.', 'KTK Qwen 125B') | Out-Null
+        }
     }
 })
 [void]$form.ShowDialog()
@@ -128,4 +173,5 @@ if ($null -ne $script:child) { $script:child.Dispose() }
 $timer.Dispose()
 $form.Dispose()
 if ($script:successful) { exit 0 }
+if ($script:cancelled) { exit 2 }
 exit 1

@@ -8,9 +8,16 @@ const integrated = readFileSync(new URL("../../scripts/Run-KTKIntegratedAcceptan
 const staged = readFileSync(new URL("../../scripts/Assert-KTKStaged.ps1", import.meta.url), "utf8");
 const packageLock = JSON.parse(readFileSync(new URL("../../config/windows-package.lock.json", import.meta.url), "utf8"));
 const windowsCi = readFileSync(new URL("../../.github/workflows/windows-package.yml", import.meta.url), "utf8");
+const localAiGui = readFileSync(new URL("../../scripts/Show-KTKLocalAI.ps1", import.meta.url), "utf8");
+const consent = readFileSync(new URL("../../scripts/Set-KTKLocalAIOptIn.ps1", import.meta.url), "utf8");
+const unified = readFileSync(new URL("../../scripts/Apply-KTKUnifiedRelease.ps1", import.meta.url), "utf8");
 
-test("integrated live installer updates enrolled MCP, then runs AI under original user", () => {
+test("integrated live installer defaults to MCP-only and requires explicit AI selection", () => {
   assert.match(setup, /Mode = '-Live'[\s\S]*?Run-KTKIntegratedAcceptance\.ps1/);
+  assert.match(setup, /CreateInputOptionPage\(wpWelcome/);
+  assert.match(setup, /InstallModePage\.Values\[0\] := True/);
+  assert.match(setup, /if InstallModePage\.Values\[1\] then begin[\s\S]*?Show-KTKLocalAI\.ps1/);
+  assert.match(setup, /ExitCode = 2 then[\s\S]*?Owner cancelled local AI safely/);
   assert.match(setup, /ExecAsOriginalUser\(UserPowerShell[\s\S]*?ewWaitUntilTerminated/);
   assert.match(setup, /Show-KTKLocalAI\.ps1/);
   assert.match(setup, /Install-KTKUserUpdater\.ps1/);
@@ -22,6 +29,22 @@ test("integrated live installer updates enrolled MCP, then runs AI under origina
   assert.match(integrated, /Verify-KTKPackage\.ps1/);
   assert.match(setup, /Run-KTKAcceptance\.ps1/);
   assert.match(setup, /Mode := '-Offline'/);
+  assert.match(localAiGui, /cancel-request\.txt/);
+  assert.match(localAiGui, /localai_user_cancelled/);
+  assert.match(localAiGui, /if \(\$script:cancelled\) \{ exit 2 \}/);
+});
+
+test("remote MCP updates never start local model download without completed owner opt-in", () => {
+  assert.match(setup, /Set-KTKLocalAIOptIn\.ps1/);
+  assert.match(setup, /LocalAIConsent \+ '" -Disable'/);
+  assert.match(setup, /if ExitCode <> 0 then[\s\S]*?LocalAIConsent \+ '" -Enable'/);
+  assert.match(consent, /Verify-KTKPackage\.ps1/);
+  assert.match(consent, /local-ai-opt-in\.json/);
+  assert.match(consent, /AreAccessRulesProtected/);
+  assert.match(unified, /\$doLocalAI = \$false/);
+  assert.match(unified, /local-ai-opt-in\.json/);
+  assert.match(unified, /if \(\$doLocalAI\) \{[\s\S]*?KTK_USER_UPDATE_QUEUED/);
+  assert.match(unified, /KTK_MCP_UPDATE_ONLY/);
 });
 
 test("one-click approval cannot enable unrelated maintenance operations", () => {
