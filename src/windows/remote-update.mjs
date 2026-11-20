@@ -17,16 +17,16 @@ const fail = code => { throw Object.assign(new Error(code), { code }); };
 // Never accept a command, executable path, target directory, or arbitrary host
 // from an MCP caller. The Worker substitutes this envelope from its own
 // protected release catalog, after OAuth scope and device-attestation checks.
-export function validateUpdateOffer(offer) {
+export function validateUpdateOffer(offer, { maxUrlLength = MAX_URL_LENGTH } = {}) {
   if (!offer || typeof offer !== "object" || Array.isArray(offer) ||
       Object.keys(offer).sort().join() !== "sha256,url,version" ||
       typeof offer.version !== "string" || !VERSION.test(offer.version) ||
       typeof offer.sha256 !== "string" || !DIGEST.test(offer.sha256) ||
-      typeof offer.url !== "string" || offer.url.length > MAX_URL_LENGTH) fail("invalid_update_offer");
+      typeof offer.url !== "string" || offer.url.length > maxUrlLength) fail("invalid_update_offer");
   let url;
   try { url = new URL(offer.url); } catch { fail("invalid_update_offer"); }
   if (url.protocol !== "https:" || url.username || url.password || url.hash || url.port ||
-      !["github.com", "api.github.com"].includes(url.hostname) &&
+      !["github.com", "api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"].includes(url.hostname) &&
       !url.hostname.endsWith(".blob.core.windows.net") &&
       !url.hostname.endsWith(".oaiusercontent.com")) fail("update_source_denied");
   return { version: offer.version, sha256: offer.sha256, url: url.toString() };
@@ -68,7 +68,9 @@ export async function downloadVerifiedRelease(offer, outputPath, { fetcher = fet
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       if (redirects === 3) fail("update_too_many_redirects");
       const next = new URL(response.headers.get("location") ?? "", url);
-      validateUpdateOffer({ ...offer, url: next.toString() });
+      // GitHub's signed binary CDN redirects can be much longer than the
+      // short, owner-approved URL stored in the Cloudflare release catalog.
+      validateUpdateOffer({ ...offer, url: next.toString() }, { maxUrlLength: 8192 });
       await response.body?.cancel();
       url = next.toString();
       continue;
