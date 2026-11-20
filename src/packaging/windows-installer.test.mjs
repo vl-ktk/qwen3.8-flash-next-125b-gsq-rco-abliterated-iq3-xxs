@@ -32,6 +32,8 @@ test("step16 installer is first-install-only and transactional with fail-closed 
   assert.match(installer, /WindowsIdentity/);
   assert.match(installer, /Start-Process.+-Verb RunAs/);
   assert.match(installer, /windows_x64_required/);
+  assert.match(installer, /\[Environment\]::Is64BitOperatingSystem/);
+  assert.doesNotMatch(installer, /\$env:PROCESSOR_ARCHITECTURE/);
   assert.match(installer, /disk_space_below_600mb/);
   assert.match(installer, /local_mcp_port_8765_busy/);
   assert.match(installer, /existing_install_requires_repair_step_17/);
@@ -106,6 +108,9 @@ test("step18 single-file setup wraps verified content and reports real acceptanc
   const setup = await load("../../config/KTK-Setup.iss");
   const runner = await load("../../scripts/Run-KTKAcceptance.ps1");
   assert.match(setup, /PrivilegesRequired=admin/);
+  assert.match(setup, /ArchitecturesInstallIn64BitMode=x64compatible/);
+  assert.match(setup, /\{sysnative\}\\WindowsPowerShell/);
+  assert.match(setup, /ExecAndLogOutput\(/);
   assert.match(setup, /Uninstallable=no/);
   assert.match(setup, /Run-KTKAcceptance\.ps1/);
   assert.match(setup, /RaiseException/);
@@ -119,6 +124,7 @@ test("step18 single-file setup wraps verified content and reports real acceptanc
   assert.doesNotMatch(setup, /ShellExec\('open', Link/);
   assert.match(runner, /\[switch\]\$Offline/);
   assert.match(runner, /\[switch\]\$Live/);
+  assert.match(runner, /\[Environment\]::Is64BitProcess/);
   assert.match(runner, /Verify-KTKPackage\.ps1/);
   assert.match(runner, /Install-KTKMCP\.ps1/);
   assert.match(runner, /Assert-OwnService/);
