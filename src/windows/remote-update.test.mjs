@@ -169,6 +169,8 @@ test("privileged errors have bounded stage codes and explicit rollback status, n
     diagnostic: { script: "maintain", line: 278, type: "methodinvocationexception" } });
   assert.deepEqual(classifyUpdateFailure({ stderr: "KTK_UPDATE_FAILURE:maintenance:powershell_exception\nKTK_UPDATE_CONTEXT:unknown:0:exception\n" }),
     { code: "maintenance_powershell_exception", recovery: "unknown", diagnostic: { script: "unknown", line: 0, type: "exception" } });
+  assert.deepEqual(classifyUpdateFailure({ stderr: "KTK_UPDATE_FAILURE:maintenance:ps_maintain_263_methodinvocationexception\n" }),
+    { code: "maintenance_ps_maintain_263_methodinvocationexception", recovery: "unknown" });
   assert.deepEqual(classifyUpdateFailure({ stderr: "arbitrary message", code: "ETIMEDOUT", killed: true }),
     { code: "maintenance_timeout", recovery: "unknown" });
   assert.deepEqual(classifyUpdateFailure({ stderr: "KTK_UPDATE_FAILURE:maintenance:secret/user" }),
@@ -217,6 +219,7 @@ test("PowerShell privileged update uses SYSTEM gate and packaged maintenance, ne
   assert.match(unified, /if \(\$doLocalAI\) \{/);
   assert.match(unified, /KTK_MCP_UPDATE_ONLY/);
   assert.match(unified, /KTKQwenUserUpdater/);
+  assert.match(unified, /ps_\{0\}_\{1\}_\{2\}/);
   assert.doesNotMatch(unified, /\[IO\.File\]::Replace\(\$next,\s*\$active,\s*\$null\)/);
   assert.match(unified, /\[IO\.File\]::Replace\(\$next,\s*\$active,\s*\$backup\)/);
   assert.match(maintenance, /updater_approval_requires_localsystem_live_update/);

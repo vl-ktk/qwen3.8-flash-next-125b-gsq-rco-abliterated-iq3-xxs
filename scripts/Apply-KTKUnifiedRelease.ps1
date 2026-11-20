@@ -5,6 +5,7 @@ param([Parameter(Mandatory=$true)][string]$PackagePath,
       [Parameter(Mandatory=$true)][string]$Version)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+try {
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne 'S-1-5-18') { throw 'unified_update_requires_system' }
 if ($Version -cnotmatch '^0\.18\.[1-9][0-9]{0,3}$') { throw 'unified_update_version_invalid' }
 $manifestPath = Join-Path $PackagePath 'MANIFEST.json'
@@ -118,4 +119,24 @@ if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force -E
 Write-Output 'KTK_USER_UPDATE_QUEUED'
 } else {
     Write-Output 'KTK_MCP_UPDATE_ONLY'
+}
+} catch {
+    # The already-installed updater (e.g. 0.18.12) knows only the safe
+    # KTK_UPDATE_FAILURE marker. Preserve meaningful symbolic exceptions,
+    # but encode non-symbolic PowerShell errors inside this trusted payload
+    # before the old wrapper collapses them to "powershell_exception".
+    $reason = [string]$_.Exception.Message
+    if ($reason -cmatch '^[a-z][a-z0-9_]{2,63}$') { throw }
+    $scriptName = [IO.Path]::GetFileName([string]$_.InvocationInfo.ScriptName)
+    $scriptKey = switch -CaseSensitive ($scriptName) {
+        'Maintain-KTKMCP.ps1' { 'maintain' }
+        'Apply-KTKUnifiedRelease.ps1' { 'unified' }
+        'Verify-KTKPackage.ps1' { 'verify' }
+        default { 'other' }
+    }
+    $line = [int]$_.InvocationInfo.ScriptLineNumber
+    if ($line -lt 1 -or $line -gt 9999) { $line = 0 }
+    $type = [string]$_.Exception.GetType().Name
+    if ($type -cnotmatch '^[A-Za-z]{3,40}$') { $type = 'exception' }
+    throw ('ps_{0}_{1}_{2}' -f $scriptKey, $line, $type.ToLowerInvariant())
 }
