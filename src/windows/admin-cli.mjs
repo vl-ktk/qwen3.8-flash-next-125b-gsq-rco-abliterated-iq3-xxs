@@ -3,10 +3,11 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { createLocalServiceController, createLocalRebootGate, checkLocalHealth, getAdminStatus, WINDOWS_SERVICE_NAME } from "./administration.mjs";
 import { runPowerShellQuery } from "./windows-tools.mjs";
+import { createEmergencyLock } from "./emergency-lock.mjs";
 
-const COMMANDS = new Set(["status", "health", "start", "stop", "restart", "configure_recovery", "reboot", "help"]);
+const COMMANDS = new Set(["status", "health", "start", "stop", "restart", "configure_recovery", "reboot", "lock", "unlock", "help"]);
 const CONTROL = new Set(["start", "stop", "restart", "configure_recovery"]);
-const HELP = `KTK Qwen MCP — локальная консоль Windows\n\nКоманды:\n  status             состояние MCP и службы (только чтение)\n  health             проверка http://127.0.0.1:8765/healthz\n  start              запустить службу с подтверждением\n  stop               остановить службу с подтверждением\n  restart            перезапустить службу с подтверждением\n  configure_recovery настроить перезапуск службы после сбоев\n  reboot             запросить перезагрузку Windows с двойным подтверждением и локальным отменяемым отсчётом 120 с\n  help               показать эту справку\n\nСлужба появится только после этапа установки. Управление и перезагрузка не доступны через удалённый MCP.\n`;
+const HELP = `KTK Qwen MCP — локальная консоль Windows\n\nКоманды:\n  status             состояние MCP и службы (только чтение)\n  health             проверка http://127.0.0.1:8765/healthz\n  lock               аварийно блокировать доступ через MCP\n  unlock             разблокировать MCP после проверки причины\n  start              запустить службу с подтверждением\n  stop               остановить службу с подтверждением\n  restart            перезапустить службу с подтверждением\n  configure_recovery настроить перезапуск службы после сбоев\n  reboot             запросить перезагрузку Windows с двойным подтверждением и локальным отменяемым отсчётом 120 с\n  help               показать эту справку\n\nСлужба появится только после этапа установки. Управление и перезагрузка не доступны через удалённый MCP.\n`;
 
 async function promptLocal(question, options = {}) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -27,6 +28,8 @@ export async function runAdminCli({
   healthCheck = checkLocalHealth,
   makeController = createLocalServiceController,
   makeRebootGate = createLocalRebootGate,
+  makeEmergencyLock = createEmergencyLock,
+  emergencyPath = process.env.QWEN_MCP_EMERGENCY_LOCK_PATH,
   paired = Boolean(process.env.QWEN_DEVICE_IDENTITY_PATH && process.env.QWEN_DEVICE_ID),
 } = {}) {
   if (!Array.isArray(args) || args.length !== 1 || !COMMANDS.has(args[0])) {
@@ -56,6 +59,13 @@ export async function runAdminCli({
     return (await ask(`Введите ${phrase} для подтверждения: `)) === phrase;
   };
   try {
+    if (command === "lock" || command === "unlock") {
+      if (!emergencyPath) throw Object.assign(Error("emergency_lock_not_configured"), { code: "emergency_lock_not_configured" });
+      if (!await confirm(command)) { write("admin_confirmation_denied\n"); return 2; }
+      const marker = makeEmergencyLock(emergencyPath, { platform });
+      write(JSON.stringify(await marker[command]()) + "\n");
+      return 0;
+    }
     if (CONTROL.has(command)) {
       const controller = makeController({ platform, authorization: confirm });
       const result = await controller.execute(command);
