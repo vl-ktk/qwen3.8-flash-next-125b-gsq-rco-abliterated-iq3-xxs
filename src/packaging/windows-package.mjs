@@ -11,7 +11,7 @@ const SOURCE_FILES = Object.freeze([
   "src/windows/device-enrollment.mjs", "src/windows/device-selftest.mjs",
   "src/windows/device-revocation.mjs",
   "src/windows/emergency-lock.mjs",
-  "src/windows/main.mjs", "src/windows/mcp-server.mjs",
+  "src/windows/main.mjs", "src/windows/mcp-server.mjs", "src/windows/model-preflight.mjs",
   "src/windows/monitoring.mjs", "src/windows/origin-auth.mjs",
   "src/windows/windows-tools.mjs",
 ]);

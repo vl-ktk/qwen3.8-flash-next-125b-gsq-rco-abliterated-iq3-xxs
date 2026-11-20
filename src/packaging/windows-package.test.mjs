@@ -20,7 +20,7 @@ async function fixture(t) {
   await mkdir(path.join(sourceRoot, "src/windows"), { recursive: true });
   await mkdir(path.join(sourceRoot, "scripts"), { recursive: true });
   await mkdir(path.join(sourceRoot, "config"), { recursive: true });
-  for (const name of ["admin-cli", "administration", "device-identity", "device-bootstrap", "device-enrollment", "device-selftest", "device-revocation", "emergency-lock", "main", "mcp-server", "monitoring", "origin-auth", "windows-tools"]) {
+  for (const name of ["admin-cli", "administration", "device-identity", "device-bootstrap", "device-enrollment", "device-selftest", "device-revocation", "emergency-lock", "main", "mcp-server", "model-preflight", "monitoring", "origin-auth", "windows-tools"]) {
     await writeFile(path.join(sourceRoot, `src/windows/${name}.mjs`), `export const ${name.replace(/-/g, "_")} = true;\n`);
   }
   await writeFile(path.join(sourceRoot, "scripts/Verify-KTKPackage.ps1"), "# check sha256\n");
@@ -62,7 +62,7 @@ async function fixture(t) {
 test("step 15 payload is reproducible, manifest-verified, without secrets or install actions", async t => {
   const f = await fixture(t);
   const result = await buildWindowsPackage(f);
-  assert.equal(result.fileCount, 36);
+  assert.equal(result.fileCount, 37);
   assert.equal(result.manifest.ready_for_installation, false);
   assert.equal(result.manifest.source_commit, f.sourceSha);
   assert.equal(result.manifest.target, "windows-x64");
@@ -72,8 +72,9 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(result.sha256, await sha256File(f.outFile));
   assert.equal((await readFile(f.outFile + ".sha256", "utf8")).trim(), `${result.sha256}  ${path.basename(f.outFile)}`);
   const zipFiles = (await run("unzip", ["-Z1", f.outFile])).stdout.trim().split("\n");
-  assert.equal(zipFiles.length, 36);
+  assert.equal(zipFiles.length, 37);
   assert.equal(zipFiles.includes("runtime/main.mjs"), true);
+  assert.equal(zipFiles.includes("runtime/model-preflight.mjs"), true);
   assert.equal(zipFiles.includes("Verify-KTKPackage.ps1"), true);
   assert.equal(zipFiles.includes("bin/cloudflared.exe"), true);
   assert.equal(zipFiles.includes("bin/node.exe"), true);
@@ -93,7 +94,7 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(zipFiles.some(name => /(?:^|\/)\.env(?:$|\.)|\.test\.mjs$|key\.pem|private|\.git|token/i.test(name)), false);
   assert.doesNotMatch((await readZip(f.outFile, "README.txt")).toString("utf8"), /DO_NOT_BUNDLE_SECRET/);
   const manifest = JSON.parse(await readZip(f.outFile, "MANIFEST.json"));
-  assert.equal(manifest.files.length, 34);
+  assert.equal(manifest.files.length, 35);
   for (const record of manifest.files) assert.equal(fakeHash(await readZip(f.outFile, record.path)), record.sha256);
   await assert.rejects(() => buildWindowsPackage(f), /package_output_exists/);
   const other = { ...f, outFile: path.join(f.root, "out", "second.zip") };

@@ -5,6 +5,7 @@ import { realpath, stat, open } from "node:fs/promises";
 import path from "node:path";
 import { collectWindowsMonitoring, queryNvidiaGpus } from "./monitoring.mjs";
 import { getAdminStatus, WINDOWS_MCP_VERSION } from "./administration.mjs";
+import { normalizePcPreflight, normalizeStorageCheck, normalizeRuntimeCheck, buildInstallationPlan } from "./model-preflight.mjs";
 
 const execFileAsync = promisify(execFile);
 const MAX_READ = 32 * 1024;
@@ -88,12 +89,56 @@ try {
   events_status = $eventsStatus
 } | ConvertTo-Json -Depth 6 -Compress
 `,
+  pc_preflight: PREFIX + `
+$os = Get-CimInstance -ClassName Win32_OperatingSystem
+$cpu = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
+$machine = Get-CimInstance -ClassName Win32_ComputerSystem
+$sessionZero = [System.Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+[pscustomobject]@{
+  os = $os.Caption; os_version = $os.Version; architecture = $os.OSArchitecture
+  processor = $cpu.Name; cores = $cpu.NumberOfCores; threads = $cpu.NumberOfLogicalProcessors
+  ram_total_bytes = $machine.TotalPhysicalMemory
+  ram_free_bytes = ([int64]$os.FreePhysicalMemory * 1024)
+  session_zero = $sessionZero
+  admin_token = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} | ConvertTo-Json -Depth 4 -Compress
+`,
+  storage_check: PREFIX + `
+$volumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' |
+  Select-Object -First 32 | ForEach-Object { [pscustomobject]@{
+    drive = $_.DeviceID; total_bytes = $_.Size; free_bytes = $_.FreeSpace } })
+$physical = @()
+$diskStatus = 'unavailable'
+try {
+  $physical = @(Get-PhysicalDisk -ErrorAction Stop | Select-Object -First 16 |
+    ForEach-Object { [pscustomobject]@{ bus_type = $_.BusType.ToString();
+      media_type = $_.MediaType.ToString(); size_bytes = $_.Size } })
+  $diskStatus = 'ok'
+} catch { $diskStatus = 'unavailable' }
+[pscustomobject]@{ fixed_volumes = $volumes; physical_disks = $physical;
+  physical_disks_status = $diskStatus } | ConvertTo-Json -Depth 5 -Compress
+`,
+  runtime_check: PREFIX + `
+$uninstallPaths = @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+  'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')
+$installed = @(Get-ItemProperty -Path $uninstallPaths -ErrorAction SilentlyContinue |
+  Where-Object { $_.DisplayName -match '(?i)^Strata(?:[ \\-]|$)' } |
+  Select-Object -First 12 | ForEach-Object {
+    [pscustomobject]@{ name = $_.DisplayName; version = $_.DisplayVersion } })
+$running = @(Get-Process -Name 'strata','strata-server' -ErrorAction SilentlyContinue |
+  Select-Object -First 20 | ForEach-Object { [pscustomobject]@{
+    name = $_.ProcessName; pid = $_.Id } })
+[pscustomobject]@{ machine_installs = $installed; running_processes = $running } |
+  ConvertTo-Json -Depth 5 -Compress
+`,
 });
 
 function validate(name, args) {
   if (!isRecord(args)) throw safeError("invalid_arguments");
   const keys = Object.keys(args);
-  if (name === "system_info" || name === "system_monitor" || name === "admin_status") {
+  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan"].includes(name)) {
     if (keys.length) throw safeError("invalid_arguments");
     return {};
   }
@@ -155,6 +200,26 @@ const DEFINITIONS = Object.freeze({
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
+  pc_preflight: {
+    name: "pc_preflight", description: "Read Windows, CPU, RAM, NVIDIA GPU and driver facts for the SC117 125B local model; report unknown capability checks honestly. No installation.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  storage_check: {
+    name: "storage_check", description: "Read free space on fixed Windows volumes and available physical disk bus/media inventory. Does not guess a volume-to-NVMe mapping or write files.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  runtime_check: {
+    name: "runtime_check", description: "Read machine-wide Strata installation registry entries, running process names and NVIDIA driver; per-user installs and CUDA execution are not verified.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  installation_plan: {
+    name: "installation_plan", description: "Generate a read-only SC117 IQ3_XXS + Strata setup plan from fresh hardware, storage and runtime observations. No downloads, installation or launch.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
   process_list: {
     name: "process_list", description: "List at most 50 Windows processes (optional exact process name). No command lines or secrets.",
     inputSchema: { type: "object", properties: {
@@ -203,7 +268,16 @@ async function readAllowedFile(filePath, roots) {
 
 export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery, readNvidia = queryNvidiaGpus, identityConfigured = false } = {}) {
   if (!Array.isArray(allowedFileRoots) || allowedFileRoots.some(root => typeof root !== "string" || !path.isAbsolute(root))) throw safeError("invalid_file_roots");
-  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", ...(allowedFileRoots.length ? ["file_read"] : [])];
+  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", ...(allowedFileRoots.length ? ["file_read"] : [])];
+  const safeGpu = async () => {
+    try { return await readNvidia(); } catch { return { status: "unavailable", reason: "gpu_inventory_failed", gpus: [] }; }
+  };
+  const readModelCheck = async name => {
+    if (name === "pc_preflight") return normalizePcPreflight(await runWindowsQuery(name, {}), await safeGpu());
+    if (name === "storage_check") return normalizeStorageCheck(await runWindowsQuery(name, {}));
+    if (name === "runtime_check") return normalizeRuntimeCheck(await runWindowsQuery(name, {}), await safeGpu());
+    throw safeError("unknown_tool");
+  };
   return {
     list: () => available.map(name => structuredClone(DEFINITIONS[name])),
     has: name => available.includes(name),
@@ -217,6 +291,14 @@ export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQue
       });
       if (name === "file_read") return readAllowedFile(params.path, allowedFileRoots);
       if (name === "system_monitor") return collectWindowsMonitoring({ readSystem: () => runWindowsQuery(name, params), readGpu: readNvidia });
+      if (["pc_preflight", "storage_check", "runtime_check"].includes(name)) return readModelCheck(name);
+      if (name === "installation_plan") {
+        // Fail individual observations closed, rather than presenting a partial
+        // inventory as proof that a machine is suitable for installation.
+        const outcomes = await Promise.allSettled([readModelCheck("pc_preflight"), readModelCheck("storage_check"), readModelCheck("runtime_check")]);
+        const [pc, storage, runtime] = outcomes.map(outcome => outcome.status === "fulfilled" ? outcome.value : null);
+        return buildInstallationPlan({ pc, storage, runtime });
+      }
       return runWindowsQuery(name, params);
     },
   };
