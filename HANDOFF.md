@@ -1,5 +1,11 @@
 # HANDOFF — Qwen 125B / Windows MCP
 
+## Блок K — разрешённый реальный тест MCP remote-update 0.18.12 → 0.18.13 (20.11.2026)
+- Владелец явно разрешил «давай» после предупреждения: для end-to-end теста выпустить 0.18.13 и через уже подключённый MCP запустить одно реальное обновление его Windows 10. Возможны временный outage и аварийный lock; если fail — не делать повторных попыток, безопасно выяснить статус.
+- Исходник до теста `main` `18165a9753c74d71c0a9207df4deb7f8352d0190` (rollback source). Cloudflare перед тестом v `d500380a-afd4-4862-aa74-8d0ea53d25ee`, deployment `1ce8dbd6-e384-4507-8fd8-d6b8e2e19b39` 100% (rollback Worker). Windows перед тестом `admin_status ready`, установлен MCP package 0.18.12; updater service Running Automatic, последняя историческая попытка failed 0.18.11.
+- Релиз-кандидат 0.18.13 намеренно содержит тот же MCP/Updater runtime, что и успешно проверенный 0.18.12: обновлены только номера версии в package lock, Setup, Windows CI и список разрешённых версий recovery (восстановлена совместимость с 0.18.11/0.18.12). Выбор MCP-only прежний, локальная модель 77 ГБ не скачивается.
+- **Тест ещё не завершён:** до полноценного вывода нужны локальные тесты, Windows CI 6/6, immutable GitHub release, публичный ZIP SHA256, trusted Cloudflare catalog, один `update_apply({version:'0.18.13'})`, затем `update_status`, `admin_status`, три службы. При ошибке — сохранить код, состояние lock и installed version, не запускать retry.
+
 ## Блок J — исправление живого сбоя 0.18.11; выпуск 0.18.12 (20.11.2026)
 - Источник перед задачей: публичный GitHub `main` `3c1c9678e88bdcacbd2316f16c5253991822a52b` (source rollback). Production Worker v16 `d03327d2-b7ec-4a0c-a585-12d3aa66ebb1`, deployment `3a5ae33c-71bf-49a2-b106-1ef42f2e5617` (Worker rollback v15 `fb283555-f64e-4df5-8863-172a780d0abe`); Worker не меняем до нового проверенного выпуска.
 - Живая попытка MCP update 0.18.11 у владельца завершилась `failed/update_failed`; установлена 0.18.10, backup 0.18.4, integrity 56 PASS. Службы и оба localhost-порта работают. После сбоя аварийный lock блокировал `/healthz` HTTP 503; владелец успешно снял lock штатным `admin-cli unlock`, ранее агент проверил `admin_status ready` и `service_status Running`. Точная точка отказа неизвестна: старый privileged updater теряет исходный stderr.
