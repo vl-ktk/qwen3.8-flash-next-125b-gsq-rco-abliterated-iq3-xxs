@@ -115,6 +115,20 @@ export async function downloadVerifiedRelease(offer, outputPath, { fetcher = fet
 // Runs ONLY a packaged, fixed PowerShell maintenance entrypoint. Its SYSTEM
 // caller is verified again by the script; no shell, user-chosen arguments or
 // user-chosen executable path enter this boundary.
+export function createMaintenanceEnvironment(source = process.env) {
+  const systemRoot = source.SystemRoot ?? "C:\\Windows";
+  return {
+    SystemRoot: systemRoot,
+    ProgramFiles: source.ProgramFiles ?? "C:\\Program Files",
+    ProgramData: source.ProgramData ?? "C:\\ProgramData",
+    // execFile replaces the entire child environment. Without a fixed PATH,
+    // PowerShell cannot resolve sc.exe, icacls.exe or schtasks.exe; the 0.18.15
+    // live failure occurred at the first sc.exe invocation.
+    Path: [path.win32.join(systemRoot, "System32"), systemRoot].join(";"),
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+  };
+}
+
 export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, download = downloadVerifiedRelease, invoke = exec } = {}) {
   validateUpdateOffer(offer);
   const temp = await mkdtemp(path.join(dataRoot, "update-"));
@@ -125,13 +139,14 @@ export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, downl
       if (typeof error?.code === "string" && /^update_[a-z_]+$/.test(error.code)) throw error;
       fail("update_download_failed");
     }
-    const native = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const childEnv = createMaintenanceEnvironment();
+    const native = path.win32.join(childEnv.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     let result;
     try {
       result = await invoke(native, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
         path.join(updaterRoot, "Run-KTKRemoteUpdate.ps1"), "-ArtifactPath", bundle, "-Version", offer.version], {
         shell: false, windowsHide: true, timeout: 300000, maxBuffer: 16384,
-        env: { SystemRoot: process.env.SystemRoot ?? "C:\\Windows", ProgramFiles: process.env.ProgramFiles ?? "C:\\Program Files", ProgramData: process.env.ProgramData ?? "C:\\ProgramData" },
+        env: childEnv,
       });
     } catch (error) {
       const diagnosis = classifyUpdateFailure(error);

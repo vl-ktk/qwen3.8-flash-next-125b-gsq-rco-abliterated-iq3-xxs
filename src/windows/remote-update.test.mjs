@@ -1,11 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { createOriginVerifier } from "./origin-auth.mjs";
-import { validateUpdateOffer, signUpdateRequest, createUpdaterServer, callLocalUpdater, downloadVerifiedRelease, applyVerifiedRelease, classifyUpdateFailure, runFixedUserTask } from "./remote-update.mjs";
+import { validateUpdateOffer, signUpdateRequest, createUpdaterServer, callLocalUpdater, downloadVerifiedRelease, applyVerifiedRelease, classifyUpdateFailure, runFixedUserTask, createMaintenanceEnvironment } from "./remote-update.mjs";
+
+const spawn = promisify(execFile);
 
 const key = randomBytes(32).toString("base64url");
 const bytes = Buffer.from("signed trusted release fixture");
@@ -141,6 +145,23 @@ test("privileged updater runs only its bundled fixed PS script with fixed argume
   assert.equal(calls[0].args.at(-2), "-Version");
   assert.equal(calls[0].args.at(-1), offer.version);
   assert.equal(calls[0].options.shell, false);
+  assert.deepEqual(calls[0].options.env, createMaintenanceEnvironment());
+});
+
+test("SYSTEM maintenance environment restores trusted Windows native command lookup", async () => {
+  const environment = createMaintenanceEnvironment({
+    SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files", ProgramData: "C:\\ProgramData", Path: "C:\\untrusted",
+  });
+  assert.deepEqual(environment, {
+    SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files", ProgramData: "C:\\ProgramData",
+    Path: "C:\\Windows\\System32;C:\\Windows", PATHEXT: ".COM;.EXE;.BAT;.CMD",
+  });
+  if (process.platform !== "win32") return;
+  const native = path.win32.join(environment.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const result = await spawn(native, ["-NoProfile", "-NonInteractive", "-Command",
+    "Get-Command sc.exe,icacls.exe,schtasks.exe -CommandType Application -ErrorAction Stop | Out-Null"],
+  { env: environment, windowsHide: true, timeout: 30000 });
+  assert.equal(result.stderr, "");
 });
 
 test("local AI is only queued for a separately opted-in owner", async t => {
@@ -220,6 +241,10 @@ test("PowerShell privileged update uses SYSTEM gate and packaged maintenance, ne
   assert.match(unified, /KTK_MCP_UPDATE_ONLY/);
   assert.match(unified, /KTKQwenUserUpdater/);
   assert.match(unified, /ps_\{0\}_\{1\}_\{2\}/);
+  // This payload executes under the older 0.18.12 updater: it must repair
+  // PATH itself before invoking maintenance, not rely on the new Node updater.
+  assert.match(unified, /\$env:Path = \(Join-Path \$windowsRoot 'System32'\) \+ ';' \+ \$windowsRoot/);
+  assert.ok(unified.indexOf("$env:Path =") < unified.indexOf("& (Join-Path $PackagePath 'Maintain-KTKMCP.ps1')"));
   assert.doesNotMatch(unified, /\[IO\.File\]::Replace\(\$next,\s*\$active,\s*\$null\)/);
   assert.match(unified, /\[IO\.File\]::Replace\(\$next,\s*\$active,\s*\$backup\)/);
   assert.match(maintenance, /updater_approval_requires_localsystem_live_update/);
