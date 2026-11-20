@@ -8,10 +8,10 @@ import { listenWindowsMcp } from "./mcp-server.mjs";
 
 test("read-only allowlist has stable schemas; no arbitrary command, script, write or service control", () => {
   const tools = createWindowsToolRegistry();
-  assert.deepEqual(tools.list().map(item => item.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status"]);
+  assert.deepEqual(tools.list().map(item => item.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status"]);
   assert.equal(tools.has("powershell"), false);
   assert.equal(tools.has("file_read"), false); // default-deny until installer configures roots
-  for (const name of ["system_info", "system_monitor", "process_list", "service_status", "app_status"]) {
+  for (const name of ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status"]) {
     const definition = tools.list().find(item => item.name === name);
     assert.equal(definition.annotations.readOnlyHint, true);
     assert.equal(definition.inputSchema.additionalProperties, false);
