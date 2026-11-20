@@ -1,6 +1,7 @@
 import { ISSUER, json, readBody, hash, isConfigured, passwordMatches, rateLimit } from "./oauth.mjs";
 import { OAuthStorage } from "./storage.mjs";
 import { signedOriginHeaders } from "./origin-auth.mjs";
+import { validateTransportPublicKey, bootstrapSecretsReady, sealBootstrapEnvelope } from "./device-bootstrap.mjs";
 
 // This is the cloud half of Windows device enrollment, not a replacement for
 // user OAuth. No device private key or long-lived device credential is stored.
@@ -40,13 +41,16 @@ export async function devicePairRoute(request, env, storage) {
     try { key = await crypto.subtle.importKey("raw", decode64(body.public_key), "Ed25519", false, ["verify"]); }
     catch { return json(400, { error: "invalid_public_key" }); }
     if (!key) return json(400, { error: "invalid_public_key" });
+    const bootstrap = body.bootstrap_public_key;
+    if (bootstrap !== undefined && !await validateTransportPublicKey(bootstrap)) return json(400, { error: "invalid_bootstrap_key" });
+    if (bootstrap !== undefined && !bootstrapSecretsReady(env)) return json(503, { error: "bootstrap_not_configured" });
     return storage.transaction(async tx => {
       const kv = new OAuthStorage(tx);
       if (!await rateLimit(kv, "device-start", 12, 900)) return json(429, { error: "rate_limited" });
       const requestId = base64url(random(24));
       const code = randomCode();
       const fingerprint = (await hash(body.public_key)).slice(0, 16).toUpperCase();
-      const record = { public_key: body.public_key, label: body.label, fingerprint, state: "pending" };
+      const record = { public_key: body.public_key, label: body.label, fingerprint, state: "pending", ...(bootstrap ? { bootstrap_public_key: bootstrap, request_id: requestId } : {}) };
       await kv.put(`device:pending:${await hash(requestId)}`, JSON.stringify(record), { expirationTtl: TTL });
       await kv.put(`device:code:${await hash(code)}`, await hash(requestId), { expirationTtl: TTL });
       return json(201, { request_id: requestId, user_code: code, fingerprint, verification_uri: ISSUER + "/device/pair/manage", expires_in: TTL });
@@ -60,7 +64,14 @@ export async function devicePairRoute(request, env, storage) {
       if (!await rateLimit(kv, "device-status", 120, 60)) return json(429, { error: "rate_limited" });
       const pending = await kv.get(`device:pending:${await hash(body.request_id)}`, "json");
       if (!pending) return json(404, { error: "pairing_not_found" });
-      return json(200, pending.state === "approved" ? { state: "approved", device_id: pending.device_id } : { state: "pending" });
+      if (pending.state !== "approved") return json(200, { state: "pending" });
+      if (pending.bootstrap_envelope) {
+        const bundle = pending.bootstrap_envelope;
+        delete pending.bootstrap_envelope; // one delivery only
+        await kv.put(`device:pending:${await hash(body.request_id)}`, JSON.stringify(pending), { expirationTtl: TTL });
+        return json(200, { state: "approved", device_id: pending.device_id, bootstrap: bundle });
+      }
+      return json(200, { state: "approved", device_id: pending.device_id });
     });
   }
   if (path === "/device/pair/manage" && request.method === "GET") {
@@ -108,6 +119,12 @@ export async function devicePairRoute(request, env, storage) {
       const pending = requestHash ? await kv.get(pendingKey, "json") : null;
       if (!pending || pending.state !== "pending" || pending.fingerprint !== fingerprint) return json(403, { error: "pairing_mismatch" });
       const deviceId = base64url(random(24));
+      // Provision only after validated same-origin owner approval. The sealed
+      // envelope is useless without the Windows-only ephemeral ECDH key.
+      if (pending.bootstrap_public_key) {
+        if (!bootstrapSecretsReady(env)) return json(503, { error: "bootstrap_not_configured" });
+        pending.bootstrap_envelope = await sealBootstrapEnvelope(env, { publicKey: pending.bootstrap_public_key, requestId: pending.request_id, deviceId });
+      }
       await kv.put("device:active", JSON.stringify({ device_id: deviceId, public_key: pending.public_key, label: pending.label }));
       pending.device_id = deviceId;
       pending.state = "approved";
