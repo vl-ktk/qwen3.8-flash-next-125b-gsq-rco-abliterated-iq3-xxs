@@ -145,7 +145,7 @@ test("registry exposes monitoring read-only to MCP and rejects unsupported argum
   assert.equal(metrics.gpu.reason, "not_installed");
   assert.notEqual(metrics.observed_at, observedAt.toISOString());
 
-  const server = await listenWindowsMcp({ port: 0, toolRegistry: registry });
+  const server = await listenWindowsMcp({ port: 0, originVerifier: () => true, toolRegistry: registry });
   t.after(async () => { await new Promise(resolve => server.close(resolve)); });
   const root = `http://127.0.0.1:${server.address().port}`;
   const send = args => fetch(`${root}/mcp`, {
