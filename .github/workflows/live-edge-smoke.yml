@@ -1,0 +1,54 @@
+name: Live Qwen Edge read-only smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/live-edge-smoke.yml
+
+jobs:
+  public-endpoints:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Read-only live HTTPS and OAuth discovery smoke (no credentials)
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+
+          const origin = 'https://qwen125b-mcp.vl-ktk.workers.dev';
+          async function get(path) {
+            const response = await fetch(origin + path, {
+              redirect: 'manual',
+              signal: AbortSignal.timeout(12000),
+              headers: { accept: 'application/json' },
+            });
+            const body = await response.text();
+            let data = null;
+            try { data = JSON.parse(body); } catch { /* Keep status + content type only. */ }
+            console.log(`${path}: HTTP ${response.status}; JSON ${Boolean(data)}`);
+            return { response, data };
+          }
+
+          const status = await get('/__edge_status');
+          assert.equal(status.response.status, 200, 'edge status HTTP failure');
+          assert.equal(status.data?.state, 'protected', 'OAuth config is not active');
+
+          const protectedResource = await get('/.well-known/oauth-protected-resource');
+          assert.equal(protectedResource.response.status, 200);
+          assert.equal(protectedResource.data?.resource, `${origin}/mcp`);
+
+          const oauth = await get('/.well-known/oauth-authorization-server');
+          assert.equal(oauth.response.status, 200);
+          assert.equal(oauth.data?.issuer, origin);
+
+          const unauthenticatedMcp = await get('/mcp');
+          assert.equal(unauthenticatedMcp.response.status, 401, 'MCP must deny anonymous callers');
+          assert.match(unauthenticatedMcp.response.headers.get('www-authenticate') ?? '', /Bearer/i);
+
+          console.log('Live public HTTP/OAuth smoke PASS. Tunnel and Windows MCP NOT tested.');
+          NODE
