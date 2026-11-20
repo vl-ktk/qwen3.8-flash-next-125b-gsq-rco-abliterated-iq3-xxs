@@ -40,6 +40,9 @@ async function fixture(t) {
   await writeFile(path.join(sourceRoot, "scripts/Show-KTKLocalAI.ps1"), "# GUI runner for original user\n");
   await writeFile(path.join(sourceRoot, "scripts/Run-KTKIntegratedAcceptance.ps1"), "# exact MCP version resume\n");
   await writeFile(path.join(sourceRoot, "scripts/Install-KTKUpdater.ps1"), "# initialize authorized updater\n");
+  await writeFile(path.join(sourceRoot, "scripts/Install-KTKUserUpdater.ps1"), "# user task registration\n");
+  await writeFile(path.join(sourceRoot, "scripts/Run-KTKUserUpdate.mjs"), "export const userUpdater = true;\n");
+  await writeFile(path.join(sourceRoot, "scripts/Apply-KTKUnifiedRelease.ps1"), "# fixed verified release transaction\n");
   await writeFile(path.join(sourceRoot, "scripts/Run-KTKRemoteUpdate.ps1"), "# fixed privileged update\n");
   await writeFile(path.join(sourceRoot, "scripts/Run-KTKUpdater.mjs"), "export const updater = true;\n");
   await writeFile(path.join(sourceRoot, "scripts/Run-KTKAcceptance.ps1"), "# one entry acceptance and report\n");
@@ -74,7 +77,7 @@ async function fixture(t) {
 test("step 15 payload is reproducible, manifest-verified, without secrets or install actions", async t => {
   const f = await fixture(t);
   const result = await buildWindowsPackage(f);
-  assert.equal(result.fileCount, 54);
+  assert.equal(result.fileCount, 57);
   assert.equal(result.manifest.ready_for_installation, false);
   assert.equal(result.manifest.source_commit, f.sourceSha);
   assert.equal(result.manifest.target, "windows-x64");
@@ -84,7 +87,7 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(result.sha256, await sha256File(f.outFile));
   assert.equal((await readFile(f.outFile + ".sha256", "utf8")).trim(), `${result.sha256}  ${path.basename(f.outFile)}`);
   const zipFiles = (await run("unzip", ["-Z1", f.outFile])).stdout.trim().split("\n");
-  assert.equal(zipFiles.length, 54);
+  assert.equal(zipFiles.length, 57);
   assert.equal(zipFiles.includes("runtime/main.mjs"), true);
   assert.equal(zipFiles.includes("runtime/model-preflight.mjs"), true);
   assert.equal(zipFiles.includes("runtime/strata-installer.mjs"), true);
@@ -96,6 +99,9 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(zipFiles.includes("runtime/remote-update.mjs"), true);
   assert.equal(zipFiles.includes("runtime/Run-KTKUpdater.mjs"), true);
   assert.equal(zipFiles.includes("Install-KTKUpdater.ps1"), true);
+  assert.equal(zipFiles.includes("Install-KTKUserUpdater.ps1"), true);
+  assert.equal(zipFiles.includes("Run-KTKUserUpdate.mjs"), true);
+  assert.equal(zipFiles.includes("Apply-KTKUnifiedRelease.ps1"), true);
   assert.equal(zipFiles.includes("Run-KTKRemoteUpdate.ps1"), true);
   assert.equal(zipFiles.includes("services/KTKQwenUpdater.xml"), true);
   assert.equal(zipFiles.includes("Install-KTKStrata.mjs"), true);
@@ -123,7 +129,7 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(zipFiles.some(name => /(?:^|\/)\.env(?:$|\.)|\.test\.mjs$|key\.pem|private|\.git|token/i.test(name)), false);
   assert.doesNotMatch((await readZip(f.outFile, "README.txt")).toString("utf8"), /DO_NOT_BUNDLE_SECRET/);
   const manifest = JSON.parse(await readZip(f.outFile, "MANIFEST.json"));
-  assert.equal(manifest.files.length, 52);
+  assert.equal(manifest.files.length, 55);
   for (const record of manifest.files) assert.equal(fakeHash(await readZip(f.outFile, record.path)), record.sha256);
   await assert.rejects(() => buildWindowsPackage(f), /package_output_exists/);
   const other = { ...f, outFile: path.join(f.root, "out", "second.zip") };

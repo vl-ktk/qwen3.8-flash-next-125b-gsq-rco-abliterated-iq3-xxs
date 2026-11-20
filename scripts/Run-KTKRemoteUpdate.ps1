@@ -34,4 +34,5 @@ Expand-Archive -LiteralPath $inner -DestinationPath $payload -ErrorAction Stop
 & (Join-Path $payload 'Verify-KTKPackage.ps1') | Out-Null
 $manifest = Get-Content -LiteralPath (Join-Path $payload 'MANIFEST.json') -Raw | ConvertFrom-Json
 if ($manifest.schema -ne 1 -or $manifest.package_version -cne $Version -or $manifest.target -cne 'windows-x64') { throw 'release_manifest_mismatch' }
-& (Join-Path $payload 'Maintain-KTKMCP.ps1') -Action Update -PackagePath $payload -Resume -UpdaterApproved
+if (-not (Test-Path -LiteralPath (Join-Path $payload 'Apply-KTKUnifiedRelease.ps1') -PathType Leaf)) { throw 'unified_update_entrypoint_missing' }
+& (Join-Path $payload 'Apply-KTKUnifiedRelease.ps1') -PackagePath $payload -Version $Version

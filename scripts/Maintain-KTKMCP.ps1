@@ -131,6 +131,11 @@ if ($Action -in @('Update','Repair')) {
     foreach ($needed in @('Maintain-KTKMCP.ps1','Revoke-KTKMCP.mjs','SelfTest-KTKMCP.mjs','Verify-KTKPackage.ps1','runtime/device-revocation.mjs','services/KTKQwenMCP.xml','services/KTKQwenTunnel.xml','bin/WinSW.exe','bin/node.exe','bin/cloudflared.exe')) {
         if ($listed -cnotcontains $needed) { throw 'incomplete_maintenance_package' }
     }
+    if ($UpdaterApproved) {
+        foreach ($needed in @('Apply-KTKUnifiedRelease.ps1','Run-KTKUserUpdate.mjs','Install-KTKLocalAI.mjs')) {
+            if ($listed -cnotcontains $needed) { throw 'unified_update_package_incomplete' }
+        }
+    }
     Assert-FileTree $PackagePath $manifest
 } elseif ($PackagePath) { throw 'package_not_used_by_action' }
 if ($Resume -and $Action -eq 'Uninstall') { throw 'uninstall_cannot_resume' }

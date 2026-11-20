@@ -6,7 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 
 const execFileAsync = promisify(execFile);
 export const WINDOWS_SERVICE_NAME = "KTKQwenMCP";
-export const WINDOWS_MCP_VERSION = "0.15.0";
+export const WINDOWS_MCP_VERSION = "0.15.1";
 const MAX_OUTPUT = 16 * 1024;
 const ACTIONS = Object.freeze({
   start: ["start", WINDOWS_SERVICE_NAME],
