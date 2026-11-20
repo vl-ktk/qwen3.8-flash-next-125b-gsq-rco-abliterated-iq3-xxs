@@ -32,20 +32,20 @@ jobs:
       - name: Fetch vendor binaries and verify pinned SHA-256
         run: node scripts/fetch-windows-vendors.mjs .generated/windows-vendors
       - name: Assemble verified staged installer candidate
-        run: node scripts/build-windows-package.mjs .generated/windows-vendors .generated/packages/KTK-Windows-MCP-0.16.1-win-x64.zip "$SOURCE_COMMIT"
+        run: node scripts/build-windows-package.mjs .generated/windows-vendors .generated/packages/KTK-Windows-MCP-0.17.0-win-x64.zip "$SOURCE_COMMIT"
       - name: Validate archive and outer SHA-256
         run: |
           cd .generated/packages
-          sha256sum --check KTK-Windows-MCP-0.16.1-win-x64.zip.sha256
-          unzip -t KTK-Windows-MCP-0.16.1-win-x64.zip
-          unzip -p KTK-Windows-MCP-0.16.1-win-x64.zip MANIFEST.json | node -e 'let x="";process.stdin.on("data",c=>x+=c);process.stdin.on("end",()=>{const m=JSON.parse(x);if(m.ready_for_installation!==false||m.source_commit!==process.env.SOURCE_COMMIT||m.files.length<29||m.executables.length!==3)process.exit(1)})'
+          sha256sum --check KTK-Windows-MCP-0.17.0-win-x64.zip.sha256
+          unzip -t KTK-Windows-MCP-0.17.0-win-x64.zip
+          unzip -p KTK-Windows-MCP-0.17.0-win-x64.zip MANIFEST.json | node -e 'let x="";process.stdin.on("data",c=>x+=c);process.stdin.on("end",()=>{const m=JSON.parse(x);if(m.ready_for_installation!==false||m.source_commit!==process.env.SOURCE_COMMIT||m.package_version!=="0.17.0"||m.files.length<32||m.executables.length!==3)process.exit(1)})'
       - name: Save Windows staged candidate (not production-ready)
         uses: actions/upload-artifact@v4
         with:
-          name: KTK-Windows-MCP-step16-${{ github.run_number }}
+          name: KTK-Windows-MCP-step17-${{ github.run_number }}
           path: |
-            .generated/packages/KTK-Windows-MCP-0.16.1-win-x64.zip
-            .generated/packages/KTK-Windows-MCP-0.16.1-win-x64.zip.sha256
+            .generated/packages/KTK-Windows-MCP-0.17.0-win-x64.zip
+            .generated/packages/KTK-Windows-MCP-0.17.0-win-x64.zip.sha256
           retention-days: 7
           compression-level: 0
           if-no-files-found: error
@@ -57,7 +57,7 @@ jobs:
       - name: Parse Windows PowerShell 5.1 and service XML (no execution)
         shell: powershell
         run: |
-          foreach ($file in @('scripts/Install-KTKMCP.ps1','scripts/Activate-KTKMCP.ps1','scripts/Verify-KTKPackage.ps1')) {
+          foreach ($file in @('scripts/Install-KTKMCP.ps1','scripts/Activate-KTKMCP.ps1','scripts/Verify-KTKPackage.ps1','scripts/Maintain-KTKMCP.ps1')) {
             $errors = $null
             $tokens = $null
             $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file).Path, [ref]$tokens, [ref]$errors)
@@ -74,11 +74,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: KTK-Windows-MCP-step16-${{ github.run_number }}
+          name: KTK-Windows-MCP-step17-${{ github.run_number }}
           path: candidate
       - name: Offline non-elevated preflight on Windows (no installation)
         shell: powershell
         run: |
-          Expand-Archive -LiteralPath 'candidate/KTK-Windows-MCP-0.16.1-win-x64.zip' -DestinationPath 'candidate/extracted'
+          Expand-Archive -LiteralPath 'candidate/KTK-Windows-MCP-0.17.0-win-x64.zip' -DestinationPath 'candidate/extracted'
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Install-KTKMCP.ps1' -CheckOnly
           if ($LASTEXITCODE -ne 0) { throw 'Windows preflight failed' }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'candidate/extracted/Maintain-KTKMCP.ps1' -Action Update -PackagePath 'candidate/extracted' -CheckOnly
+          if ($LASTEXITCODE -ne 0) { throw 'Windows maintenance package preflight failed' }

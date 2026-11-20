@@ -4,7 +4,7 @@
 
 ## Проверяемый пакет после пункта 15
 
-Сборка `0.16.1` добавляет WinSW x64, XML двух Windows-служб, staging PowerShell-скрипт, отдельный `Activate-KTKMCP.ps1` и экспериментальный одношаговый `Start-KTKMCP.cmd` (`Install-KTKMCP.ps1 -Enroll`) для зашифрованного bootstrap через подтверждение владельца. Архив содержит manifest/SHA256SUMS и исключает ключи и токены. `ready_for_installation: false`: **его нельзя запускать на ПК друга** до полной приёмки.
+Сборка `0.17.0` сохраняет возможности `0.16.1` (WinSW x64, две службы, staging/activation через защищённый bootstrap) и добавляет `Maintain-KTKMCP.ps1` для обновления, ремонта, rollback и подтверждаемого удаления с онлайн-отвязкой. Архив содержит manifest/SHA256SUMS и исключает ключи и токены. `ready_for_installation: false`: **его нельзя запускать на ПК друга** до полной приёмки. См. `docs/STEP_17_REPORT.md`.
 
 ### Режим staging
 
