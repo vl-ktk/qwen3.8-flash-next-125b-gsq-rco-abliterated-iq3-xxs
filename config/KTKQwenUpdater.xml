@@ -6,7 +6,7 @@
   <arguments>"%BASE%\runtime\Run-KTKUpdater.mjs"</arguments>
   <workingdirectory>%BASE%\runtime</workingdirectory>
   <startmode>Manual</startmode>
-  <serviceaccount><domain>NT AUTHORITY</domain><user>LocalSystem</user></serviceaccount>
+  <serviceaccount><username>LocalSystem</username></serviceaccount>
   <logpath>%PROGRAMDATA%\KTK\Updater\logs</logpath>
   <log mode="roll"/>
 </service>

@@ -75,7 +75,7 @@ jobs:
             if ($xml.service.startmode -ne 'Manual' -or $xml.service.serviceaccount.user -ne 'LocalService') { throw 'Unsafe service configuration' }
           }
           [xml]$updater = Get-Content -LiteralPath 'config/KTKQwenUpdater.xml' -Raw
-          if ($updater.service.id -ne 'KTKQwenUpdater' -or $updater.service.startmode -ne 'Manual' -or $updater.service.serviceaccount.user -ne 'LocalSystem') { throw 'Unsafe updater service configuration' }
+          if ($updater.service.id -ne 'KTKQwenUpdater' -or $updater.service.startmode -ne 'Manual' -or $updater.service.serviceaccount.username -ne 'LocalSystem') { throw 'Unsafe updater service configuration' }
   windows-preflight:
     needs: windows-payload
     runs-on: windows-latest
