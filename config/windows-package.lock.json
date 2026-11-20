@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "package_version": "0.18.0",
+  "package_version": "0.18.1",
   "platform": "win32",
   "architecture": "x64",
   "artifacts": [

@@ -113,6 +113,10 @@ test("step18 single-file setup wraps verified content and reports real acceptanc
   assert.match(setup, /\/OFFLINE/);
   assert.match(setup, /deleteafterinstall/);
   assert.match(setup, /UNSIGNED/);
+  assert.match(setup, /ExecAndLogOutput/);
+  assert.match(setup, /ShellExecAsOriginalUser/);
+  assert.match(setup, /KTK_APPROVAL_URL:/);
+  assert.doesNotMatch(setup, /ShellExec\('open', Link/);
   assert.match(runner, /\[switch\]\$Offline/);
   assert.match(runner, /\[switch\]\$Live/);
   assert.match(runner, /Verify-KTKPackage\.ps1/);
