@@ -107,6 +107,7 @@ test("step17 maintenance requires local confirmation, exact service ownership an
 test("step18 single-file setup wraps verified content and reports real acceptance, not a false cloud success", async () => {
   const setup = await load("../../config/KTK-Setup.iss");
   const runner = await load("../../scripts/Run-KTKAcceptance.ps1");
+  const resumeGate = await load("../../scripts/Assert-KTKStaged.ps1");
   assert.match(setup, /PrivilegesRequired=admin/);
   assert.match(setup, /ArchitecturesInstallIn64BitMode=x64compatible/);
   assert.match(setup, /\{sysnative\}\\WindowsPowerShell/);
@@ -129,6 +130,13 @@ test("step18 single-file setup wraps verified content and reports real acceptanc
   assert.match(runner, /Install-KTKMCP\.ps1/);
   assert.match(runner, /Assert-OwnService/);
   assert.match(runner, /Remove-OwnTestInstall/);
+  assert.match(runner, /Assert-KTKStaged\.ps1/);
+  assert.match(runner, /Activate-KTKMCP\.ps1/);
+  assert.match(runner, /FileShare\]::None/);
+  assert.match(resumeGate, /staged_service_ownership_mismatch/);
+  assert.match(resumeGate, /staged_partial_enrollment_needs_repair/);
+  assert.match(resumeGate, /SHA256SUMS\.txt/);
+  assert.match(resumeGate, /emergency\.lock/);
   assert.match(runner, /existing_ktk_install_refusing_overwrite/);
   assert.match(runner, /real ChatGPT OAuth\/MCP call still requires/);
   assert.match(runner, /[.]txt/);

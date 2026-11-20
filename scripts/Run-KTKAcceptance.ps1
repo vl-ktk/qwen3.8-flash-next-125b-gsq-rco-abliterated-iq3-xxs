@@ -14,6 +14,7 @@ $reportFile = Join-Path $reportFolder ('KTK-MCP-Test-' + (Get-Date -Format 'yyyy
 $steps = New-Object System.Collections.Generic.List[string]
 $created = $false
 $completed = $false
+$resuming = $false
 
 function Record([string]$Text) { $steps.Add($Text) }
 function Assert-Admin {
@@ -56,25 +57,46 @@ try {
     if (-not [Environment]::Is64BitProcess) { throw 'native_x64_powershell_required' }
     Assert-Admin
     Record 'UAC: administrator confirmed'
-    if ((Test-Path -LiteralPath $root) -or (Test-Path -LiteralPath $data)) { throw 'existing_ktk_install_refusing_overwrite' }
-    foreach ($name in @('KTKQwenMCP','KTKQwenTunnel')) {
-        if (Get-Service -Name $name -ErrorAction SilentlyContinue) { throw 'existing_ktk_service_refusing_overwrite' }
-    }
     & (Join-Path $source 'Verify-KTKPackage.ps1') | Out-Null
     Record 'Integrity: MANIFEST + SHA256 OK'
-    & (Join-Path $source 'Install-KTKMCP.ps1') -CheckOnly | Out-Null
-    Record 'Preflight: OS, x64, disk, ports and service names OK'
+    if ((Test-Path -LiteralPath $root) -or (Test-Path -LiteralPath $data)) {
+        if ($Offline -or -not (Test-Path -LiteralPath $root) -or -not (Test-Path -LiteralPath $data)) { throw 'existing_ktk_install_refusing_overwrite' }
+        # No overwrite or update: only a verified, locked, unprovisioned KTK
+        # staging from a known previous installer can be enrolled again.
+        & (Join-Path $source 'Assert-KTKStaged.ps1') -Root $root -Data $data | Out-Null
+        $resuming = $true
+        $created = $true
+        Record 'Recovery: existing KTK staging verified; safely retrying enrollment'
+    } else {
+        foreach ($name in @('KTKQwenMCP','KTKQwenTunnel')) {
+            if (Get-Service -Name $name -ErrorAction SilentlyContinue) { throw 'existing_ktk_service_refusing_overwrite' }
+        }
+        & (Join-Path $source 'Install-KTKMCP.ps1') -CheckOnly | Out-Null
+        Record 'Preflight: OS, x64, disk, ports and service names OK'
+    }
     if ($Offline) {
         & (Join-Path $source 'Install-KTKMCP.ps1') | Out-Null
         $created = $true
         Assert-OfflineState
+        & (Join-Path $source 'Assert-KTKStaged.ps1') -Root $root -Data $data | Out-Null
         Record 'Real Windows SCM: two LocalService Manual/Stopped services OK'
-        Record 'Staged identity, emergency lock and no bundled credentials OK'
+        Record 'Staged identity, emergency lock and safe automatic resume gate OK'
         Remove-OwnTestInstall
         $created = $false
         Record 'Cleanup: both own services and only fresh test directories removed'
     } else {
-        & (Join-Path $source 'Install-KTKMCP.ps1') -Enroll
+        if ($resuming) {
+            # FileShare.None prevents a concurrent second installer from
+            # attempting enrollment of the same staged private identity.
+            $claim = $null
+            try {
+                $claimFile = Join-Path $data 'state\acceptance.lock'
+                $claim = [IO.File]::Open($claimFile, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+                & (Join-Path $root 'Activate-KTKMCP.ps1')
+            } finally { if ($null -ne $claim) { $claim.Dispose() } }
+        } else {
+            & (Join-Path $source 'Install-KTKMCP.ps1') -Enroll
+        }
         $created = $true
         foreach ($name in @('KTKQwenMCP','KTKQwenTunnel')) {
             $entry = Assert-OwnService $name

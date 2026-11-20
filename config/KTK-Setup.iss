@@ -11,7 +11,7 @@
 [Setup]
 AppId={{F087E1C8-6597-4DE8-960B-38D903A6E3BE}
 AppName=KTK Qwen MCP (Acceptance Candidate)
-AppVersion=0.18.2
+AppVersion=0.18.3
 AppPublisher=KTK
 DefaultDirName={autopf}\KTK\QwenMCP
 CreateAppDir=no
@@ -25,7 +25,7 @@ DisableProgramGroupPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=no
 OutputDir={#OutputRoot}
-OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.2-TEST-UNSIGNED
+OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.3-TEST-UNSIGNED
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
@@ -65,7 +65,7 @@ begin
         RaiseException('Invalid device fingerprint');
     if not ApprovalOpened then begin
       ApprovalOpened := True;
-      WizardForm.StatusLabel.Caption := 'Подтверди привязку в открывшемся браузере. Ожидаем одобрения...';
+      WizardForm.StatusLabel.Caption := 'Один раз разреши подключение в браузере. Коды вводить не нужно.';
       { Critical: never launch an elevated browser from an elevated installer. }
       if not ShellExecAsOriginalUser('open', Link, '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode) then
         RaiseException('Could not open pairing page: ' + SysErrorMessage(ErrorCode));
