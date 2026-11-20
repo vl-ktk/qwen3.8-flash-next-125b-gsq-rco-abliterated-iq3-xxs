@@ -10,10 +10,13 @@ import { createEmergencyLock } from "./emergency-lock.mjs";
 import { runAdminCli } from "./admin-cli.mjs";
 
 const gatewayKey = randomBytes(32).toString("base64url");
-function signed(method, route, body = "", { key = gatewayKey, timestamp = String(Math.floor(Date.now() / 1000)), nonce = randomBytes(16).toString("base64url") } = {}) {
+const protectedHeaders = ["accept", "content-type", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-qwen-device-id", "x-qwen-device-nonce"];
+function signed(method, route, body = "", { key = gatewayKey, timestamp = String(Math.floor(Date.now() / 1000)), nonce = randomBytes(16).toString("base64url"), headers = {} } = {}) {
   const digest = createHash("sha256").update(body).digest("hex");
-  const payload = `QWEN-ORIGIN-V1\n${timestamp}\n${nonce}\n${method}\n${route}\n${digest}`;
+  const binding = protectedHeaders.map(name => `${name}:${headers[name] ?? ""}`).join("\n");
+  const payload = `QWEN-ORIGIN-V1\n${timestamp}\n${nonce}\n${method}\n${route}\n${digest}\n${binding}`;
   return {
+    ...headers,
     "x-qwen-origin-timestamp": timestamp,
     "x-qwen-origin-nonce": nonce,
     "x-qwen-origin-signature": createHmac("sha256", Buffer.from(key, "base64url")).update(payload).digest("base64url"),
@@ -32,6 +35,7 @@ test("strict gateway verification rejects missing, forged, old, replayed and mod
   assert.equal(verify(valid, "POST", "/mcp", Buffer.from("changed")), false);
   assert.equal(verify(valid, "GET", "/mcp", content), false);
   assert.equal(verify(valid, "POST", "/device/attest", content), false);
+  assert.equal(verify({ ...valid, "mcp-session-id": "another-session" }, "POST", "/mcp", content), false);
   assert.equal(verify(valid, "POST", "/mcp", content), true);
   assert.equal(verify(valid, "POST", "/mcp", content), false);
 });
@@ -52,14 +56,14 @@ test("Windows loopback rejects unsigned MCP and attestation before reaching tool
   assert.equal((await post({})).status, 403);
   assert.equal((await fetch(root + "/device/attest")).status, 403);
   assert.equal((await post(signed("POST", "/mcp", "forged"))).status, 403);
-  const one = signed("POST", "/mcp", body);
+  const one = signed("POST", "/mcp", body, { headers: base });
   assert.equal((await post(one)).status, 200);
   assert.equal(calls, 1);
   assert.equal((await post(one)).status, 403);
   assert.equal(calls, 1);
   assert.deepEqual(audit.map(e => e.event), ["origin_auth_denied", "origin_auth_denied", "origin_auth_denied", "tool_executed", "origin_auth_denied"]);
   assert.doesNotMatch(JSON.stringify(audit), /"arguments"|"system_info"|x-qwen-origin-signature|forged/);
-  assert.equal((await fetch(root + "/device/attest", { headers: signed("GET", "/device/attest") })).status, 403); // no paired identity
+  assert.equal((await fetch(root + "/device/attest", { headers: signed("GET", "/device/attest", "", { headers: { accept: "*/*" } }) })).status, 403); // no paired identity
 });
 
 test("emergency lock activates immediately, including health and valid signed calls", async t => {
@@ -74,8 +78,8 @@ test("emergency lock activates immediately, including health and valid signed ca
   assert.deepEqual(await marker.lock(), { status: "locked" });
   assert.equal(await marker.isLocked(), true);
   assert.equal((await fetch(root + "/healthz")).status, 503);
-  assert.equal((await fetch(root + "/device/attest", { headers: signed("GET", "/device/attest") })).status, 503);
-  assert.equal((await fetch(root + "/mcp", { headers: signed("GET", "/mcp") })).status, 503);
+  assert.equal((await fetch(root + "/device/attest", { headers: signed("GET", "/device/attest", "", { headers: { accept: "*/*" } }) })).status, 503);
+  assert.equal((await fetch(root + "/mcp", { headers: signed("GET", "/mcp", "", { headers: { accept: "*/*" } }) })).status, 503);
   assert.deepEqual(await marker.unlock(), { status: "unlocked" });
   assert.equal((await fetch(root + "/healthz")).status, 200);
   const missing = createEmergencyLock(path.join(dir, "removed", "flag"));
