@@ -154,7 +154,9 @@ export class QwenOAuthState extends DurableObject {
     for (const name of ["accept", "content-type", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id"]) {
       if (request.headers.has(name)) headers.set(name, request.headers.get(name));
     }
-    const signed = await signedOriginHeaders(this.env.QWEN_MCP_GATEWAY_KEY, request.method, "/mcp", body ?? "");
+    // Avoid fetch() silently inserting an unsigned Accept: */* header.
+    if (!headers.has("accept")) headers.set("accept", "*/*");
+    const signed = await signedOriginHeaders(this.env.QWEN_MCP_GATEWAY_KEY, request.method, "/mcp", body ?? "", headers);
     if (!signed) return json(503, { error: "origin_auth_not_configured" });
     for (const [name, value] of Object.entries(signed)) headers.set(name, value);
     let upstream;
