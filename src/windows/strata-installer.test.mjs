@@ -19,6 +19,7 @@ test("pinned official Strata v0.2.17 release and plan cannot install without loc
   assert.ok(strataInstallPlan().required_free_bytes > 2_000_000_000);
   assert.equal(strataInstallRoot("C:\\Users\\Vlad\\AppData\\Local"), "C:\\Users\\Vlad\\AppData\\Local\\KTK\\Strata");
   for (const profile of ["", "/etc", "C:\\", "\\\\server\\share"]) assert.throws(() => strataInstallRoot(profile), /invalid_local_user_profile/);
+  for (const profile of ["C:\\Windows\\ServiceProfiles\\LocalService\\AppData\\Local", "C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local"]) assert.throws(() => strataInstallRoot(profile), /strata_interactive_user_required/);
   const root = path.join(dir, "KTK", "Strata");
   for (const args of [{ ownerApproved: false }, { platform: "linux" }, { arch: "arm64" }]) {
     await assert.rejects(() => installStrata({ ...options(root), ...args, getScript: () => { throw Error("should_not_download"); } }), /strata_owner_approval_required|strata_windows_x64_required/);
