@@ -110,6 +110,7 @@ test("step18 single-file setup wraps verified content and reports real acceptanc
   assert.match(setup, /Run-KTKAcceptance\.ps1/);
   assert.match(setup, /RaiseException/);
   assert.match(setup, /ewWaitUntilTerminated/);
+  assert.match(setup, /\/OFFLINE/);
   assert.match(setup, /deleteafterinstall/);
   assert.match(setup, /UNSIGNED/);
   assert.match(runner, /\[switch\]\$Offline/);
