@@ -752,15 +752,23 @@ test("pairing management blocks forged origins, CSRF replay and incorrect owner 
   assert.equal(csp, `default-src 'none'; script-src 'nonce-${nonce[1]}'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`);
   const script = page.match(/<script nonce="[A-Za-z0-9_-]{32}">([\s\S]+?)<\/script>/)?.[1];
   assert.ok(script);
+  assert.match(page, /type="hidden" name="code"/);
+  assert.match(page, /type="hidden" name="fingerprint"/);
+  assert.doesNotMatch(page, /Код \(10 символов\)|Отпечаток ключа \(16 символов\)/);
+  assert.match(page, /name="action" value="approve" disabled/);
   for (const fragment of ["#code=ABCDEFGHJK&fingerprint=0123456789ABCDEF", "#code=bad&fingerprint=0123456789ABCDEF"]) {
     const input = { code: { value: "" }, fingerprint: { value: "" } };
+    const approveButton = { disabled: true };
+    const help = { textContent: "" };
     let replaced = false;
     runInNewContext(script, { location: { hash: fragment, pathname: "/device/pair/manage" },
       history: { replaceState: (_, __, path) => { assert.equal(path, "/device/pair/manage"); replaced = true; } },
-      document: { querySelector: selector => input[selector.match(/name="([^"]+)"/)[1]] } });
+      document: { querySelector: selector => input[selector.match(/name="([^"]+)"/)[1]],
+        getElementById: id => id === "pair-approve" ? approveButton : help } });
     assert.equal(input.code.value, fragment.startsWith("#code=ABCDEFGHJK") ? "ABCDEFGHJK" : "");
     assert.equal(input.fingerprint.value, fragment.startsWith("#code=ABCDEFGHJK") ? "0123456789ABCDEF" : "");
-    assert.equal(replaced, fragment.startsWith("#code=ABCDEFGHJK"));
+    assert.equal(approveButton.disabled, !fragment.startsWith("#code=ABCDEFGHJK"));
+    assert.equal(replaced, true); // Even a malformed fragment is removed.
   }
   const started = await (await pairStart(f, f.identity)).json();
   const approve = { action: "approve", code: started.user_code, fingerprint: started.fingerprint };

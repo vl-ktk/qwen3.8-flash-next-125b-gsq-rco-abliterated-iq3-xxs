@@ -98,22 +98,27 @@ export async function devicePairRoute(request, env, storage) {
     const proof = base64url(random(32));
     const nonce = base64url(random(24));
     await storage.transaction(async tx => new OAuthStorage(tx).put(`device:csrf:${await hash(proof)}`, "1", { expirationTtl: TTL }));
-    return html(`<h1>Qwen: разрешить устройство</h1><p>Проверьте код и отпечаток ключа на самом Windows-компьютере.</p><form method="post" action="/device/pair/manage">
-<input type="hidden" name="proof" value="${proof}"><label>Код (10 символов) <input name="code" required maxlength="10"></label>
-<label>Отпечаток ключа (16 символов) <input name="fingerprint" required maxlength="16"></label>
-<label>Пароль владельца <input type="password" name="password" required maxlength="1024" autocomplete="current-password"></label>
-<button name="action" value="approve">Разрешить</button>
-<p>Для отзыва введите идентификатор устройства вместо кода и отпечатка:</p>
-<label>Device ID <input name="device_id" maxlength="32"></label><button name="action" value="revoke" formnovalidate>Отозвать доступ</button></form>
+    return html(`<h1>Подключить компьютер к Qwen?</h1>
+<p id="pair-help">Дождитесь запуска установщика. Это разрешение требуется только при первом подключении.</p>
+<form method="post" action="/device/pair/manage">
+<input type="hidden" name="proof" value="${proof}">
+<input type="hidden" name="code"><input type="hidden" name="fingerprint">
+<p><label>Пароль владельца (один раз) <input type="password" name="password" required maxlength="1024" autocomplete="current-password"></label></p>
+<button id="pair-approve" name="action" value="approve" disabled>Подключить компьютер</button>
+<details><summary>Отозвать доступ ранее подключённого компьютера</summary>
+<p><label>Device ID <input name="device_id" maxlength="32"></label>
+<button name="action" value="revoke" formnovalidate>Отозвать доступ</button></p></details></form>
 <script nonce="${nonce}">"use strict";
-// Only accept exact short-lived pairing metadata from the URL fragment.
-// The fragment never reaches the Worker; clear it before entering a password.
+// The installer passes short-lived pairing metadata through a local fragment.
+// The owner never types or sees the code/fingerprint. No fragment: no approval.
 const match = /^#code=([A-HJ-NP-Z2-9]{10})&fingerprint=([A-F0-9]{16})$/.exec(location.hash);
 if (match) {
   document.querySelector('input[name="code"]').value = match[1];
   document.querySelector('input[name="fingerprint"]').value = match[2];
-  history.replaceState(null, "", location.pathname);
+  document.getElementById('pair-approve').disabled = false;
+  document.getElementById('pair-help').textContent = 'Установщик подготовил безопасное подключение. Для первого разрешения подтвердите владельца.';
 }
+if (location.hash) history.replaceState(null, "", location.pathname);
 </script>`, nonce);
   }
   if (path === "/device/pair/manage" && request.method === "POST") {
@@ -162,7 +167,7 @@ if (match) {
       pending.state = "approved";
       await kv.put(pendingKey, JSON.stringify(pending), { expirationTtl: TTL });
       await kv.delete(codeKey);
-      return html(`<h1>Устройство ${escaped(pending.label)} привязано</h1><p>Device ID: <code>${deviceId}</code></p>`);
+      return html(`<h1>Компьютер подключён</h1><p>${escaped(pending.label)}: разрешение сохранено. Можете закрыть эту вкладку — установщик продолжит настройку.</p><details><summary>Device ID для отзыва доступа</summary><code>${deviceId}</code></details>`);
     });
   }
   return json(405, { error: "method_not_allowed" }, { allow: path === "/device/pair/manage" ? "GET, POST" : "POST" });
