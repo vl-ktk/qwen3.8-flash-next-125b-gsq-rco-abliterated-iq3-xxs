@@ -6,6 +6,7 @@ const SIGNATURE = /^[A-Za-z0-9_-]{43}$/;
 const TIMESTAMP = /^\d{10}$/;
 const MAX_SKEW_SECONDS = 45;
 const MAX_USED_NONCES = 2048;
+const protectedHeaders = ["accept", "content-type", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-qwen-device-id", "x-qwen-device-nonce"];
 
 export function decodeGatewayKey(value) {
   if (typeof value !== "string" || !SECRET.test(value)) throw Error("invalid_gateway_key");
@@ -30,7 +31,8 @@ export function createOriginVerifier(keyText, { clock = Date.now } = {}) {
     for (const [value, expiresAt] of used) if (expiresAt < now) used.delete(value);
     if (used.has(nonce) || used.size >= MAX_USED_NONCES) return false;
     const bodyHash = createHash("sha256").update(rawBody).digest("hex");
-    const payload = `QWEN-ORIGIN-V1\n${timestamp}\n${nonce}\n${method}\n${path}\n${bodyHash}`;
+    const binding = protectedHeaders.map(name => `${name}:${headers[name] ?? ""}`).join("\n");
+    const payload = `QWEN-ORIGIN-V1\n${timestamp}\n${nonce}\n${method}\n${path}\n${bodyHash}\n${binding}`;
     const expected = createHmac("sha256", key).update(payload).digest();
     const received = Buffer.from(signature, "base64url");
     if (received.length !== expected.length || received.toString("base64url") !== signature || !timingSafeEqual(expected, received)) return false;
