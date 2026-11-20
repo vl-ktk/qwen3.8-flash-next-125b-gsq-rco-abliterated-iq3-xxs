@@ -109,7 +109,8 @@ test("step18 single-file setup wraps verified content and reports real acceptanc
   const runner = await load("../../scripts/Run-KTKAcceptance.ps1");
   assert.match(setup, /PrivilegesRequired=admin/);
   assert.match(setup, /ArchitecturesInstallIn64BitMode=x64compatible/);
-  assert.match(setup, /ExecAndLogOutputWithNativeSysDir/);
+  assert.match(setup, /\{sysnative\}\\WindowsPowerShell/);
+  assert.match(setup, /ExecAndLogOutput\(/);
   assert.match(setup, /Uninstallable=no/);
   assert.match(setup, /Run-KTKAcceptance\.ps1/);
   assert.match(setup, /RaiseException/);

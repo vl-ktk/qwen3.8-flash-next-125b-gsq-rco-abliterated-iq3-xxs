@@ -87,15 +87,16 @@ var
   Index: Integer;
 begin
   if CurStep <> ssPostInstall then Exit;
-  PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  { Inno Setup 6 is a 32-bit installer: Sysnative resolves to native System32. }
+  PowerShell := ExpandConstant('{sysnative}\WindowsPowerShell\v1.0\powershell.exe');
   Mode := '-Live';
   for Index := 1 to ParamCount do
     if Uppercase(ParamStr(Index)) = '/OFFLINE' then Mode := '-Offline';
   Args := '-NoProfile -ExecutionPolicy Bypass -File "' +
     ExpandConstant('{tmp}\KTKPayload\Run-KTKAcceptance.ps1') + '" ' + Mode;
   ApprovalOpened := False;
-  { Always start native 64-bit Windows PowerShell even if Inno Setup is 32-bit. }
-  if not ExecAndLogOutputWithNativeSysDir(PowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode, @KTKLog) then
+  { Sysnative avoids WOW64 redirection without newer Inno 7 helper APIs. }
+  if not ExecAndLogOutput(PowerShell, Args, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode, @KTKLog) then
     RaiseException('Could not run KTK acceptance; see Windows error ' + IntToStr(ExitCode));
   if ExitCode <> 0 then
     RaiseException('KTK acceptance failed; open KTK-MCP-Test report on Desktop.');
