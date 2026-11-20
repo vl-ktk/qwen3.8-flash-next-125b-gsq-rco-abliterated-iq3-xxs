@@ -7,7 +7,9 @@ import path from "node:path";
 
 const SOURCE_FILES = Object.freeze([
   "src/windows/admin-cli.mjs", "src/windows/administration.mjs",
-  "src/windows/device-identity.mjs", "src/windows/emergency-lock.mjs",
+  "src/windows/device-identity.mjs", "src/windows/device-bootstrap.mjs",
+  "src/windows/device-enrollment.mjs", "src/windows/device-selftest.mjs",
+  "src/windows/emergency-lock.mjs",
   "src/windows/main.mjs", "src/windows/mcp-server.mjs",
   "src/windows/monitoring.mjs", "src/windows/origin-auth.mjs",
   "src/windows/windows-tools.mjs",
@@ -90,9 +92,12 @@ export async function buildWindowsPackage({ sourceRoot, vendorDir, outFile, sour
     await include(path.join(sourceRoot, "scripts/Verify-KTKPackage.ps1"), "Verify-KTKPackage.ps1");
     await include(path.join(sourceRoot, "scripts/Install-KTKMCP.ps1"), "Install-KTKMCP.ps1");
     await include(path.join(sourceRoot, "scripts/Generate-KTKIdentity.mjs"), "Generate-KTKIdentity.mjs");
+    await include(path.join(sourceRoot, "scripts/Enroll-KTKMCP.mjs"), "Enroll-KTKMCP.mjs");
+    await include(path.join(sourceRoot, "scripts/SelfTest-KTKMCP.mjs"), "SelfTest-KTKMCP.mjs");
+    await include(path.join(sourceRoot, "scripts/Activate-KTKMCP.ps1"), "Activate-KTKMCP.ps1");
     await include(path.join(sourceRoot, "config/KTKQwenMCP.xml"), "services/KTKQwenMCP.xml");
     await include(path.join(sourceRoot, "config/KTKQwenTunnel.xml"), "services/KTKQwenTunnel.xml");
-    const notice = `KTK Windows MCP ${packageLock.package_version}\nSource: ${sourceSha}\nSTAGED INSTALLER - NOT YET READY FOR PRODUCTION.\nInstall-KTKMCP.ps1 stages Windows services disabled, generates device identity, and validates ACLs.\nNo service starts without separately approved secrets, pairing and Cloudflare rollout.\nDo not deploy to a friend's PC until Windows acceptance (step 18) succeeds.\nNo credentials or model files are included.\n`;
+    const notice = `KTK Windows MCP ${packageLock.package_version}\nSource: ${sourceSha}\nSTAGED INSTALLER - NOT YET READY FOR PRODUCTION.\nInstall-KTKMCP.ps1 stages Windows services disabled, generates device identity, and validates ACLs.\nActivate-KTKMCP.ps1 is an OWNER-APPROVED activation candidate (Cloudflare Worker must first support encrypted bootstrap and hold separately configured secrets).\nDo not deploy to a friend's PC until Windows acceptance (step 18) succeeds.\nNo credentials or model files are included.\n`;
     await writeFile(path.join(stage, "README.txt"), notice, "utf8");
     await utimes(path.join(stage, "README.txt"), STABLE_TIME, STABLE_TIME);
     fileRecords.push({ path: "README.txt", sha256: createHash("sha256").update(notice).digest("hex"), bytes: Buffer.byteLength(notice) });
