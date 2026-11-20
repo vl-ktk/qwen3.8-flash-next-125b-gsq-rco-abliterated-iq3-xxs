@@ -138,7 +138,7 @@ test("file_read never advertises access without roots and rejects relative/malfo
 
 test("MCP tool call returns structured data and safely redacted failures", async t => {
   const reg = createWindowsToolRegistry({ runWindowsQuery: async (name) => name === "system_info" ? { os: "Windows 10", cores: 16 } : Promise.reject(Error("SECRET-STDERR")) });
-  const server = await listenWindowsMcp({ port: 0, toolRegistry: reg });
+  const server = await listenWindowsMcp({ port: 0, originVerifier: () => true, toolRegistry: reg });
   t.after(async () => { await new Promise(resolve => server.close(resolve)); });
   const root = `http://127.0.0.1:${server.address().port}`;
   const post = (name, args = {}) => fetch(root + "/mcp", {
