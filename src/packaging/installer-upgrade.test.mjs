@@ -63,7 +63,8 @@ test("owner-run live upgrade rotates a preexisting verified rollback only after 
   const verifies = maintenance.indexOf("if ($rotatePrevious) {");
   const checksBackup = maintenance.indexOf("Assert-NoLinks $previous", verifies);
   const verifiesBackup = maintenance.indexOf("& (Join-Path $previous 'Verify-KTKPackage.ps1')", verifies);
-  const stopsServices = maintenance.indexOf("Set-ManualStopped\nif ($Action -eq 'Uninstall')");
+  // Service stop is inside the guarded transaction, so it can recover too.
+  const stopsServices = maintenance.indexOf("    Set-ManualStopped\n    if ($Action -in @('Update','Repair'))");
   const stagesReplacement = maintenance.indexOf("Set-CodeAcl $stage", stopsServices);
   const rotates = maintenance.indexOf("Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction Stop", stagesReplacement);
   const preservesCurrent = maintenance.indexOf("[IO.Directory]::Move($root, $previous)", rotates);

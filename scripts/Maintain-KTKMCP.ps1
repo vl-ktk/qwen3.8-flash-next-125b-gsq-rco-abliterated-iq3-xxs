@@ -221,8 +221,8 @@ if ($rotatePrevious) {
 
 # Fail closed on interrupted maintenance, regardless of whether services stop.
 if (-not (Test-Path -LiteralPath $lock)) { New-Item -ItemType File -Path $lock -ErrorAction Stop | Out-Null }
-Set-ManualStopped
 if ($Action -eq 'Uninstall') {
+    Set-ManualStopped
     # No local credential deletion if the Worker did not explicitly revoke the pairing.
     if (Test-Path -LiteralPath $receipt -PathType Leaf) {
         & (Join-Path $root 'bin\node.exe') (Join-Path $root 'Revoke-KTKMCP.mjs') (Join-Path $data 'secrets\device-identity.json') $receipt
@@ -246,6 +246,9 @@ $stageCreated = $false
 $oldMoved = $false
 $newMoved = $false
 try {
+    # Stopping services is part of the transaction: a partially stopped
+    # original installation must also enter the recovery path on failure.
+    Set-ManualStopped
     if ($Action -in @('Update','Repair')) {
         New-Item -ItemType Directory -Path $stage -ErrorAction Stop | Out-Null
         $stageCreated = $true
@@ -305,8 +308,18 @@ try {
     # If live health cannot be restored, preserve the emergency lock and fail
     # closed; never pretend a network outage or failed self-test was success.
     if ($Action -eq 'Update' -and $Resume -and (Test-Path -LiteralPath $root) -and (Test-Enrollment)) {
-        try { Assert-RunningHealthy $root; Write-Output 'Original KTK version restored and healthy after failed update.' }
-        catch { Write-Output 'Original files restored, but recovery remains locked; further intervention required.' }
+        try {
+            Assert-RunningHealthy $root
+            Write-Output 'KTK_RECOVERY_OK'
+            Write-Output 'Original KTK version restored and healthy after failed update.'
+        } catch {
+            # Do not throw away the actual recovery diagnostic; the fixed
+            # SYSTEM wrapper will surface only its safe code, never paths.
+            $recoveryCode = [string]$_.Exception.Message
+            if ($recoveryCode -cnotmatch '^[a-z][a-z0-9_]{2,63}$') { $recoveryCode = 'health_check_failed' }
+            Write-Output ('KTK_RECOVERY_LOCKED:{0}' -f $recoveryCode)
+            Write-Output 'Original files restored, but recovery remains locked; further intervention required.'
+        }
     }
     throw $failure
 }

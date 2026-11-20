@@ -4,6 +4,8 @@ param([Parameter(Mandatory=$true)][string]$ArtifactPath,
       [Parameter(Mandatory=$true)][string]$Version)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$phase = 'preflight'
+try {
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne 'S-1-5-18') { throw 'updater_requires_localsystem' }
 if ($Version -cnotmatch '^0\.18\.[1-9][0-9]{0,3}$') { throw 'invalid_release_version' }
 $data = Join-Path $env:ProgramData 'KTK\Updater'
@@ -16,6 +18,7 @@ if (-not (Test-Path -LiteralPath $staged -PathType Leaf) -or
 $work = Split-Path -Parent $staged
 $outer = Join-Path $work 'outer'
 $payload = Join-Path $work 'payload'
+$phase = 'outer_archive'
 New-Item -ItemType Directory -Path $outer -ErrorAction Stop | Out-Null
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [IO.Compression.ZipFile]::OpenRead($staged)
@@ -25,14 +28,25 @@ try {
     if ($entries.Count -ne 2 -or @($entries | Where-Object { $allowed -cnotcontains $_ }).Count -ne 0) { throw 'artifact_contents_unexpected' }
 } finally { $zip.Dispose() }
 Expand-Archive -LiteralPath $staged -DestinationPath $outer -ErrorAction Stop
+$phase = 'inner_checksum'
 $inner = Join-Path $outer "KTK-Windows-MCP-$Version-win-x64.zip"
 $checksum = (Get-Content -LiteralPath ($inner + '.sha256') -Raw).Trim()
 $expected = '^([a-f0-9]{64})  ' + [regex]::Escape([IO.Path]::GetFileName($inner)) + '$'
 if ($checksum -cmatch $expected) { $expectedHash = $Matches[1] } else { throw 'inner_checksum_format_invalid' }
 if ((Get-FileHash -LiteralPath $inner -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedHash) { throw 'inner_checksum_mismatch' }
+$phase = 'payload_verification'
 Expand-Archive -LiteralPath $inner -DestinationPath $payload -ErrorAction Stop
 & (Join-Path $payload 'Verify-KTKPackage.ps1') | Out-Null
 $manifest = Get-Content -LiteralPath (Join-Path $payload 'MANIFEST.json') -Raw | ConvertFrom-Json
 if ($manifest.schema -ne 1 -or $manifest.package_version -cne $Version -or $manifest.target -cne 'windows-x64') { throw 'release_manifest_mismatch' }
 if (-not (Test-Path -LiteralPath (Join-Path $payload 'Apply-KTKUnifiedRelease.ps1') -PathType Leaf)) { throw 'unified_update_entrypoint_missing' }
+$phase = 'maintenance'
 & (Join-Path $payload 'Apply-KTKUnifiedRelease.ps1') -PackagePath $payload -Version $Version
+} catch {
+    # Machine-readable bounded diagnostics. No exception text, paths, tokens,
+    # installation data or untrusted PowerShell output leave this boundary.
+    $code = [string]$_.Exception.Message
+    if ($code -cnotmatch '^[a-z][a-z0-9_]{2,63}$') { $code = 'powershell_exception' }
+    [Console]::Error.WriteLine(('KTK_UPDATE_FAILURE:{0}:{1}' -f $phase, $code))
+    exit 1
+}

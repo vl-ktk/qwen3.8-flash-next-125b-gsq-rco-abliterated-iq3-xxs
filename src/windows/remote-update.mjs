@@ -14,6 +14,20 @@ const MAX_REQUEST = 4096;
 const MAX_URL_LENGTH = 2048;
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 
+// PowerShell's fixed SYSTEM entrypoint emits only allowlisted diagnostic
+// identifiers. Never return its raw stdout/stderr to the MCP caller.
+export function classifyUpdateFailure(error) {
+  const stderr = typeof error?.stderr === "string" ? error.stderr : "";
+  const stdout = typeof error?.stdout === "string" ? error.stdout : "";
+  const marker = stderr.match(/^KTK_UPDATE_FAILURE:([a-z][a-z_]{2,32}):([a-z][a-z0-9_]{2,63})\r?$/m);
+  const recovered = /^KTK_RECOVERY_OK\r?$/m.test(stdout) ? "healthy" :
+    /^KTK_RECOVERY_LOCKED:[a-z][a-z0-9_]{2,63}\r?$/m.test(stdout) ? "locked" : "unknown";
+  const code = marker ? `${marker[1]}_${marker[2]}` :
+    error?.killed || error?.signal === "SIGTERM" || error?.code === "ETIMEDOUT" ? "maintenance_timeout" :
+    error?.code === "ENOENT" ? "powershell_unavailable" : "maintenance_failed";
+  return { code, recovery: recovered };
+}
+
 // Never accept a command, executable path, target directory, or arbitrary host
 // from an MCP caller. The Worker substitutes this envelope from its own
 // protected release catalog, after OAuth scope and device-attestation checks.
@@ -103,13 +117,23 @@ export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, downl
   const temp = await mkdtemp(path.join(dataRoot, "update-"));
   const bundle = path.join(temp, "artifact.zip");
   try {
-    await download(offer, bundle);
+    try { await download(offer, bundle); }
+    catch (error) {
+      if (typeof error?.code === "string" && /^update_[a-z_]+$/.test(error.code)) throw error;
+      fail("update_download_failed");
+    }
     const native = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    const result = await invoke(native, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-      path.join(updaterRoot, "Run-KTKRemoteUpdate.ps1"), "-ArtifactPath", bundle, "-Version", offer.version], {
-      shell: false, windowsHide: true, timeout: 300000, maxBuffer: 16384,
-      env: { SystemRoot: process.env.SystemRoot ?? "C:\\Windows", ProgramFiles: process.env.ProgramFiles ?? "C:\\Program Files", ProgramData: process.env.ProgramData ?? "C:\\ProgramData" },
-    });
+    let result;
+    try {
+      result = await invoke(native, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+        path.join(updaterRoot, "Run-KTKRemoteUpdate.ps1"), "-ArtifactPath", bundle, "-Version", offer.version], {
+        shell: false, windowsHide: true, timeout: 300000, maxBuffer: 16384,
+        env: { SystemRoot: process.env.SystemRoot ?? "C:\\Windows", ProgramFiles: process.env.ProgramFiles ?? "C:\\Program Files", ProgramData: process.env.ProgramData ?? "C:\\ProgramData" },
+      });
+    } catch (error) {
+      const diagnosis = classifyUpdateFailure(error);
+      throw Object.assign(new Error(diagnosis.code), diagnosis);
+    }
     const output = result?.stdout;
     const aiQueued = typeof output === "string" && output.includes("KTK_USER_UPDATE_QUEUED");
     const mcpOnly = typeof output === "string" && output.includes("KTK_MCP_UPDATE_ONLY");
@@ -117,7 +141,8 @@ export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, downl
     return { status: aiQueued ? "user_pending" : "updated", version: offer.version };
   } finally {
     // Only this invocation's newly-created private staging folder is removed.
-    await rm(temp, { recursive: true, force: true });
+    // Cleanup failure must not hide the primary update/recovery failure.
+    await rm(temp, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -165,7 +190,9 @@ export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1",
       reply(202, { status: "accepted", version: offer.version });
       Promise.resolve().then(() => apply(offer, { updaterRoot, dataRoot })).then(
         result => report({ status: result?.status === "user_pending" ? "user_pending" : "updated", version: offer.version, started_at: startedAt }),
-        error => report({ status: "failed", version: offer.version, code: typeof error?.code === "string" ? error.code : "update_failed" }),
+        error => report({ status: "failed", version: offer.version,
+          code: typeof error?.code === "string" && /^[a-z][a-z0-9_]{2,120}$/.test(error.code) ? error.code : "update_failed",
+          recovery: ["healthy", "locked"].includes(error?.recovery) ? error.recovery : "unknown" }),
       ).catch(() => { state = { status: "failed", code: "status_unavailable" }; });
     } catch { if (!res.writableEnded) reply(400, { error: "invalid_request" }); }
   });
