@@ -28,7 +28,7 @@ export async function sha256File(file) {
 }
 
 export function validatePackageLock(lock) {
-  if (lock?.schema !== 1 || !/^0\.17\.\d+$/.test(lock.package_version ?? "") || lock.platform !== "win32" || lock.architecture !== "x64" || !Array.isArray(lock.artifacts) || !Array.isArray(lock.licenses)) throw Error("invalid_package_lock");
+  if (lock?.schema !== 1 || !/^0\.18\.\d+$/.test(lock.package_version ?? "") || lock.platform !== "win32" || lock.architecture !== "x64" || !Array.isArray(lock.artifacts) || !Array.isArray(lock.licenses)) throw Error("invalid_package_lock");
   if (lock.artifacts.length !== 3 || lock.licenses.length !== 3) throw Error("invalid_package_lock");
   if (lock.artifacts.map(x => x.id).join(",") !== "node,cloudflared,winsw") throw Error("invalid_package_lock");
   for (const artifact of lock.artifacts) {
@@ -98,10 +98,11 @@ export async function buildWindowsPackage({ sourceRoot, vendorDir, outFile, sour
     await include(path.join(sourceRoot, "scripts/Activate-KTKMCP.ps1"), "Activate-KTKMCP.ps1");
     await include(path.join(sourceRoot, "scripts/Maintain-KTKMCP.ps1"), "Maintain-KTKMCP.ps1");
     await include(path.join(sourceRoot, "scripts/Revoke-KTKMCP.mjs"), "Revoke-KTKMCP.mjs");
+    await include(path.join(sourceRoot, "scripts/Run-KTKAcceptance.ps1"), "Run-KTKAcceptance.ps1");
     await include(path.join(sourceRoot, "scripts/Start-KTKMCP.cmd"), "Start-KTKMCP.cmd");
     await include(path.join(sourceRoot, "config/KTKQwenMCP.xml"), "services/KTKQwenMCP.xml");
     await include(path.join(sourceRoot, "config/KTKQwenTunnel.xml"), "services/KTKQwenTunnel.xml");
-    const notice = `KTK Windows MCP ${packageLock.package_version}\nSource: ${sourceSha}\nSTAGED INSTALLER - NOT YET READY FOR PRODUCTION.\nInstall-KTKMCP.ps1 stages Windows services disabled, generates device identity, and validates ACLs.\nStart-KTKMCP.cmd is an experimental single-action launcher for staged install + owner-approved activation.\nActivate-KTKMCP.ps1 requires a Worker already supporting encrypted bootstrap and holding separately configured secrets.\nMaintain-KTKMCP.ps1 supports confirmed update, repair, rollback and remote-revoked uninstall; defaults to locked/stopped.\nDo not deploy to a friend's PC until Windows acceptance (step 18) succeeds.\nNo credentials or model files are included.\n`;
+    const notice = `KTK Windows MCP ${packageLock.package_version}\nSource: ${sourceSha}\nACCEPTANCE CANDIDATE - NOT YET READY FOR PRODUCTION.\nRun-KTKAcceptance.ps1 is a guarded one-entry tester; it records a desktop report and refuses to overwrite existing installations.\nInstall-KTKMCP.ps1 stages Windows services disabled, generates device identity, and validates ACLs.\nStart-KTKMCP.cmd is an experimental single-action launcher for staged install + owner-approved activation.\nActivate-KTKMCP.ps1 requires a Worker already supporting encrypted bootstrap and holding separately configured secrets.\nMaintain-KTKMCP.ps1 supports confirmed update, repair, rollback and remote-revoked uninstall; defaults to locked/stopped.\nDo not deploy to a friend's PC until Windows acceptance (step 18) succeeds.\nNo credentials or model files are included.\n`;
     await writeFile(path.join(stage, "README.txt"), notice, "utf8");
     await utimes(path.join(stage, "README.txt"), STABLE_TIME, STABLE_TIME);
     fileRecords.push({ path: "README.txt", sha256: createHash("sha256").update(notice).digest("hex"), bytes: Buffer.byteLength(notice) });
