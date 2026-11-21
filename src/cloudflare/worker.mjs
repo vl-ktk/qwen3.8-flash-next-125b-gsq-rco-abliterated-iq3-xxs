@@ -4,8 +4,9 @@ import { ISSUER, RESOURCE, SCOPES, json, secure, challenge, readBody, oauthReque
 import { DEVICE_PATHS, devicePairRoute, attestDevice } from "./device-pairing.mjs";
 import { signedOriginHeaders } from "./origin-auth.mjs";
 
-// Explicitly scoped KTK update is the ONLY mutation; arbitrary commands,
-// service actions, operating system reboots and unknown tools are denied.
+// Explicitly scoped KTK release updates and tightly allowlisted KTK service
+// maintenance are the only mutations. Arbitrary commands, PC-wide admin,
+// reboots and unknown tools are denied.
 export const TOOL_SCOPES = Object.freeze({
   system_info: "qwen:read", system_monitor: "qwen:read", process_list: "qwen:read",
   service_status: "qwen:read", app_status: "qwen:read", file_read: "qwen:files:read",
@@ -15,6 +16,9 @@ export const TOOL_SCOPES = Object.freeze({
   pc_full_audit: "qwen:read", pc_gpu_audit: "qwen:read",
   pc_storage_audit: "qwen:read", pc_memory_audit: "qwen:read",
   pc_install_diagnostics: "qwen:read", pc_readiness_report: "qwen:read",
+  pc_performance_advice: "qwen:read",
+  pc_maintenance_preview: "qwen:read", pc_maintenance_status: "qwen:read",
+  pc_maintenance_apply: "qwen:maintenance",
   update_status: "qwen:read", update_apply: "qwen:update", update_resume: "qwen:update",
 });
 const VERSION = /^0\.18\.[1-9]\d{0,3}$/;
@@ -170,6 +174,20 @@ export class QwenOAuthState extends DurableObject {
         if (!message.params || Array.isArray(message.params) || typeof message.params.name !== "string") return json(400, { error: "invalid_request" });
         const scope = Object.hasOwn(TOOL_SCOPES, message.params?.name) ? TOOL_SCOPES[message.params.name] : null;
         if (!scope || !auth.scope.includes(scope)) return challenge("insufficient_scope", 403);
+        if (message.params.name === "pc_maintenance_apply") {
+          const args = message.params.arguments;
+          if (!args || typeof args !== "object" || Array.isArray(args) ||
+              Object.keys(args).sort().join() !== "confirmation,plan_id" ||
+              typeof args.plan_id !== "string" || !/^[a-f0-9]{32}$/.test(args.plan_id) ||
+              args.confirmation !== `CONFIRM KTK MAINTENANCE ${args.plan_id}`)
+            return json(400, { error: "invalid_maintenance_request" });
+        }
+        if (message.params.name === "pc_maintenance_preview") {
+          const args = message.params.arguments;
+          if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).join() !== "action" ||
+              !["start_ktk_tunnel", "rollback_ktk_tunnel", "enable_ktk_tunnel_autostart", "rollback_ktk_tunnel_autostart"].includes(args.action))
+            return json(400, { error: "invalid_maintenance_request" });
+        }
         if (message.params.name === "update_apply") {
           const args = message.params.arguments;
           if (!args || Array.isArray(args) || typeof args !== "object" || Object.keys(args).join() !== "version") return json(400, { error: "invalid_update_request" });

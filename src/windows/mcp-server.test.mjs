@@ -90,7 +90,7 @@ test("modern discover, list and errors are stateless with metadata", async t => 
   assert.deepEqual(d._meta["io.modelcontextprotocol/serverInfo"], { name: "qwen125b-windows-mcp", version: "0.15.2" });
   const list = await f.modern("tools/list");
   assert.equal(list.status, 200);
-  assert.deepEqual((await list.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report"]);
+  assert.deepEqual((await list.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "pc_performance_advice"]);
   const unknown = await f.modern("tools/call", { name: "powershell", arguments: {} });
   assert.equal(unknown.status, 400);
   assert.equal((await unknown.json()).error.code, -32602);
@@ -119,7 +119,7 @@ test("legacy initialize, required session, notification, ping, list, GET SSE, DE
   const f = await fixture(t);
   const sid = await f.startLegacy();
   assert.equal((await f.legacy("tools/list", {}, null)).status, 404);
-  assert.deepEqual((await (await f.legacy("tools/list", {}, sid)).json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report"]);
+  assert.deepEqual((await (await f.legacy("tools/list", {}, sid)).json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "pc_performance_advice"]);
   assert.equal((await f.legacy("ping", {}, sid)).status, 200);
   const notify = await fetch(f.root + "/mcp", { method: "POST", headers: { ...baseHeaders, "mcp-protocol-version": LEGACY, "mcp-session-id": sid }, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) });
   assert.equal(notify.status, 202);

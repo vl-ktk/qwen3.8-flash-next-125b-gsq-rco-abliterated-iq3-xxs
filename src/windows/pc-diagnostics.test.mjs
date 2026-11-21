@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createWindowsToolRegistry, runPowerShellQuery } from "./windows-tools.mjs";
 import { normalizePcFullAudit, normalizePcGpuAudit, normalizePcStorageAudit, normalizePcMemoryAudit,
-  normalizePcInstallDiagnostics, buildPcReadinessReport } from "./pc-diagnostics.mjs";
+  normalizePcInstallDiagnostics, buildPcReadinessReport, buildPcPerformanceRecommendations } from "./pc-diagnostics.mjs";
 
 const GIB = 1024 ** 3;
 const gpuRaw = { status: "ok", gpus: [{ index: 0, name: "NVIDIA GeForce RTX 3090 Ti", driver_version: "576.52",
@@ -60,6 +60,29 @@ test("Windows 11 PC audit reports recorded hardware, pagefile and execution cont
   assert.deepEqual(install.updater_status, { status: "updated", version: "0.18.16", code: null });
   assert.equal(install.strata_user_scope, "unknown_in_service_context");
   assert.equal(install.pinned_download_network, "not_tested");
+});
+
+test("PC performance advisor is read-only, reports RAM/VRAM pressure and refuses fictitious cleanups", async () => {
+  const ok = normalize();
+  const expected = buildPcPerformanceRecommendations(ok);
+  assert.equal(expected.mode, "advice_only_no_pc_changes");
+  assert.equal(expected.ram_available_bytes, 45 * GIB);
+  assert.deepEqual(expected.recommendations, []);
+  assert.ok(expected.unknowns.includes("pagefile_policy_not_measured"));
+  assert.match(expected.note, /No RAM cache clearing/);
+  const f = buildPcPerformanceRecommendations({ full: ok.full,
+    gpu: normalizePcGpuAudit(raw.pc_gpu_audit, { status: "ok", gpus: [{ ...gpuRaw.gpus[0], vram_used_bytes: 17 * GIB }] }),
+    memory: normalizePcMemoryAudit({ ...raw.pc_memory_audit, ram_free_bytes: 7 * GIB }, gpuRaw) });
+  assert.ok(f.recommendations.includes("review_high_ram_usage_before_manual_model_load"));
+  assert.ok(f.recommendations.includes("review_gpu_apps_before_manual_model_load"));
+  let writes = 0;
+  const tools = createWindowsToolRegistry({ runWindowsQuery: async name => raw[name], readNvidia: async () => gpuRaw,
+    updater: async () => { writes++; throw Error("not allowed"); } });
+  assert.equal((await tools.call("pc_performance_advice", {})).mode, "advice_only_no_pc_changes");
+  assert.equal(writes, 0);
+  await assert.rejects(() => tools.call("pc_performance_advice", { close: "chrome.exe" }), /invalid_arguments/);
+  const unknown = await createWindowsToolRegistry({ runWindowsQuery: async () => { throw Error("unavailable"); } }).call("pc_performance_advice", {});
+  assert.equal(unknown.ram_available_bytes, null);
 });
 
 test("unverified disk mapping and missing sensors are unknown, not invented NVMe/CUDA/pass", () => {

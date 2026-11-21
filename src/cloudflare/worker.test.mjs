@@ -189,6 +189,29 @@ test("KTK update requires dedicated OAuth scope and gateway-owned release metada
   assert.equal(JSON.parse(f.calls[1].body).params.name, "update_resume");
 });
 
+test("privileged PC maintenance requires its own OAuth scope, never merely read or update rights", async t => {
+  const f = await fixture(t);
+  const read = await f.login();
+  const update = await f.login({ scope: "qwen:read qwen:update" });
+  const maintenance = await f.login({ scope: "qwen:read qwen:maintenance" });
+  const confirmation = "CONFIRM KTK MAINTENANCE " + "a".repeat(32);
+  const mutation = { name: "pc_maintenance_apply", arguments: { plan_id: "a".repeat(32), confirmation } };
+  assert.equal((await f.mcp(read.access_token, "tools/call", mutation)).status, 403);
+  assert.equal((await f.mcp(update.access_token, "tools/call", mutation)).status, 403);
+  assert.equal((await f.mcp(maintenance.access_token, "tools/call", { name: "update_apply", arguments: { version: "0.18.6" } })).status, 403);
+  assert.equal(f.calls.length, 0);
+  for (const name of ["pc_maintenance_preview", "pc_maintenance_status"]) {
+    const response = await f.mcp(read.access_token, "tools/call", { name, arguments: name.endsWith("preview") ? { action: "start_ktk_tunnel" } : {} });
+    assert.equal(response.status, 200);
+  }
+  assert.equal(f.calls.length, 2);
+  const applied = await f.mcp(maintenance.access_token, "tools/call", mutation);
+  assert.equal(applied.status, 200, await applied.clone().text());
+  assert.deepEqual(JSON.parse(f.calls.at(-1).body).params, mutation);
+  assert.equal((await f.mcp(maintenance.access_token, "tools/call", { name: "powershell", arguments: { command: "whoami" } })).status, 403);
+  assert.equal((await f.mcp(maintenance.access_token, "tools/call", { name: "pc_maintenance_apply", arguments: { plan_id: "a".repeat(32), command: "whoami" } })).status, 400);
+});
+
 test("origin shared key is required before device attestation and MCP forwarding", async t => {
   const f = await fixture(t, { gatewayConfigured: false });
   const login = await f.login();
@@ -992,7 +1015,7 @@ test("step 10: real loopback Windows server interoperates with OAuth gateway and
   assert.deepEqual((await discover.json()).result.supportedVersions, ["2026-07-28", "2025-11-25"]);
   const listed = await f.mcp(access_token, "tools/list", modernParams, { ...modernHeaders, "mcp-method": "tools/list" });
   assert.equal(listed.status, 200, await listed.clone().text());
-  assert.deepEqual((await listed.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report"]);
+  assert.deepEqual((await listed.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "pc_performance_advice"]);
   const called = await f.mcp(access_token, "tools/call", { ...modernParams, name: "system_info", arguments: {} }, { ...modernHeaders, "mcp-method": "tools/call", "mcp-name": "system_info" });
   assert.equal(called.status, 200, await called.clone().text());
   assert.equal(JSON.parse((await called.json()).result.content[0].text).source, "windows-test-double");
