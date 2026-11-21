@@ -175,24 +175,25 @@ try {
   pc_storage_audit: PREFIX + `
 $volumes = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object -First 32 |
   ForEach-Object {
-    $mapping = $false; $number = $null; $bus = $null; $media = $null; $health = $null
-    try {
-      if ($_.DeviceID -match '^[A-Za-z]:$') {
-        $parts = @(Get-Partition -DriveLetter $_.DeviceID.Substring(0,1) -ErrorAction Stop)
-        if ($parts.Count -eq 1) {
-          $disk = Get-Disk -Number $parts[0].DiskNumber -ErrorAction Stop
-          if ($null -ne $disk -and $null -ne $disk.BusType) {
-            $mapping = $true; $number = $disk.Number; $bus = $disk.BusType.ToString()
-            $health = $(if ($null -ne $disk.HealthStatus) { $disk.HealthStatus.ToString() } else { $null })
-          }
-        }
-      }
-    } catch {}
     [pscustomobject]@{ drive=$_.DeviceID; total_bytes=$_.Size; free_bytes=$_.FreeSpace
-      filesystem=$_.FileSystem; disk_number=$number; bus_type=$bus; media_type=$media
-      disk_health=$health; mapping_verified=$mapping }
+      filesystem=$_.FileSystem }
   })
 [pscustomobject]@{ volumes=$volumes } | ConvertTo-Json -Depth 5 -Compress
+`,
+  // Physical mapping is optional and deliberately isolated. Some Windows
+  // storage providers can hang on Get-Partition/Get-Disk; never lose the
+  // already observed volume/free-space data because of that slow provider.
+  pc_storage_mapping: PREFIX + `
+$parts = @(Get-Partition -ErrorAction Stop | Where-Object { $_.DriveLetter -match '^[A-Za-z]$' } | Select-Object -First 32)
+$mapped = @($parts | ForEach-Object {
+  $disk = Get-Disk -Number $_.DiskNumber -ErrorAction Stop
+  if ($disk -and $disk.BusType) {
+    [pscustomobject]@{ drive=(([string]$_.DriveLetter).ToUpperInvariant() + ':'); disk_number=$disk.Number
+      bus_type=$disk.BusType.ToString(); disk_health=$(if ($disk.HealthStatus) { $disk.HealthStatus.ToString() } else { $null })
+      mapping_verified=$true }
+  }
+})
+[pscustomobject]@{ volumes=$mapped } | ConvertTo-Json -Depth 4 -Compress
 `,
   pc_memory_audit: PREFIX + `
 $os = Get-CimInstance Win32_OperatingSystem
@@ -254,7 +255,7 @@ try {
 function validate(name, args) {
   if (!isRecord(args)) throw safeError("invalid_arguments");
   const keys = Object.keys(args);
-  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "update_status", "update_resume"].includes(name)) {
+  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_storage_mapping", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "update_status", "update_resume"].includes(name)) {
     if (keys.length) throw safeError("invalid_arguments");
     return {};
   }
@@ -296,7 +297,7 @@ export async function runPowerShellQuery(name, args, { platform = process.platfo
   let result;
   try {
     result = await invoke(exe, ["-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", script], {
-      windowsHide: true, shell: false, timeout: name === "system_monitor" ? 12000 : ["pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics"].includes(name) ? 30000 : 8000, maxBuffer: MAX_TEXT, encoding: "utf8", env,
+      windowsHide: true, shell: false, timeout: name === "pc_storage_mapping" ? 9000 : name === "system_monitor" ? 12000 : ["pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics"].includes(name) ? 30000 : 8000, maxBuffer: MAX_TEXT, encoding: "utf8", env,
     });
   } catch { throw safeError("powershell_unavailable"); }
   if (typeof result.stdout !== "string" || Buffer.byteLength(result.stdout, "utf8") > MAX_TEXT) throw safeError("powershell_unavailable");
@@ -441,7 +442,18 @@ export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQue
   const readPcAudit = async name => {
     if (name === "pc_full_audit") return normalizePcFullAudit(await runWindowsQuery(name, {}));
     if (name === "pc_gpu_audit") return normalizePcGpuAudit(await runWindowsQuery(name, {}), await safeGpu());
-    if (name === "pc_storage_audit") return normalizePcStorageAudit(await runWindowsQuery(name, {}));
+    if (name === "pc_storage_audit") {
+      const logical = await runWindowsQuery(name, {});
+      let physical = null;
+      try { physical = await runWindowsQuery("pc_storage_mapping", {}); } catch { /* Mapping unknown; logical capacity stays valid. */ }
+      const mapping = new Map(Array.isArray(physical?.volumes) ? physical.volumes.filter(v => typeof v?.drive === "string" && /^[A-Za-z]:$/.test(v.drive)).map(v => [v.drive.toUpperCase(), v]) : []);
+      return normalizePcStorageAudit({ volumes: Array.isArray(logical?.volumes) ? logical.volumes.map(v => ({ ...v,
+        mapping_verified: mapping.get(v?.drive?.toUpperCase())?.mapping_verified === true,
+        disk_number: mapping.get(v?.drive?.toUpperCase())?.disk_number ?? null,
+        bus_type: mapping.get(v?.drive?.toUpperCase())?.bus_type ?? null,
+        disk_health: mapping.get(v?.drive?.toUpperCase())?.disk_health ?? null,
+      })) : null });
+    }
     if (name === "pc_memory_audit") return normalizePcMemoryAudit(await runWindowsQuery(name, {}), await safeGpu());
     if (name === "pc_install_diagnostics") return normalizePcInstallDiagnostics(await runWindowsQuery(name, {}));
     throw safeError("unknown_tool");

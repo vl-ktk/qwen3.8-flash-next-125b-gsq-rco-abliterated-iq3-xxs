@@ -79,6 +79,25 @@ test("unverified disk mapping and missing sensors are unknown, not invented NVMe
   assert.ok(report.next_actions.includes("complete_missing_read_only_observations"));
 });
 
+test("slow disk provider never hides verified logical free space; verified NVMe requires separate partition mapping", async () => {
+  const logical = { volumes: raw.pc_storage_audit.volumes.map(v => ({ drive: v.drive,
+    total_bytes: v.total_bytes, free_bytes: v.free_bytes, filesystem: v.filesystem })) };
+  const failed = createWindowsToolRegistry({ runWindowsQuery: async name => {
+    if (name === "pc_storage_audit") return logical;
+    throw Error("slow_storage_provider_secret");
+  } });
+  const unverified = await failed.call("pc_storage_audit", {});
+  assert.equal(unverified.status, "observed");
+  assert.equal(unverified.volumes[1].free_bytes, 290 * GIB);
+  assert.equal(unverified.volumes[1].volume_to_disk_mapping, "unknown");
+  assert.deepEqual(unverified.candidate_nvme_drives, []);
+  const working = createWindowsToolRegistry({ runWindowsQuery: async name => name === "pc_storage_mapping"
+    ? { volumes: [raw.pc_storage_audit.volumes[1]] } : logical });
+  const verified = await working.call("pc_storage_audit", {});
+  assert.deepEqual(verified.candidate_nvme_drives, ["D:"]);
+  assert.equal(verified.volumes[1].disk_number, 1);
+});
+
 test("Windows 10, insufficient RAM/VRAM, and missing space cannot falsely pass readiness", () => {
   const ok = normalize();
   const report = buildPcReadinessReport(ok);
@@ -124,8 +143,8 @@ test("new diagnostic MCP tools accept only empty objects, compose fixed queries 
   assert.equal(report.status, "needs_action");
   assert.equal(report.mode, "read_only_no_installation");
   assert.deepEqual(Object.keys(report.evidence), ["full_audit", "gpu_audit", "storage_audit", "memory_audit", "install_diagnostics"]);
-  assert.equal(calls.length, 10);
-  assert.ok(calls.every(({ name, args }) => Object.hasOwn(raw, name) && Object.keys(args).length === 0));
+  assert.equal(calls.length, 12);
+  assert.ok(calls.every(({ name, args }) => (Object.hasOwn(raw, name) || name === "pc_storage_mapping") && Object.keys(args).length === 0));
   await assert.rejects(() => registry.call("pc_readiness_report", { install: true }), /invalid_arguments/);
   const broken = createWindowsToolRegistry({ runWindowsQuery: async name => name === "pc_gpu_audit" ? Promise.reject(Error("SECRET")) : raw[name], readNvidia: async () => gpuRaw });
   const missing = await broken.call("pc_readiness_report", {});
@@ -134,7 +153,7 @@ test("new diagnostic MCP tools accept only empty objects, compose fixed queries 
 });
 
 test("Windows 11 diagnostic queries are static, bounded and read-only even when given hostile data", async () => {
-  for (const name of Object.keys(raw)) {
+  for (const name of [...Object.keys(raw), "pc_storage_mapping"]) {
     const captured = [];
     await runPowerShellQuery(name, {}, { platform: "win32", invoke: async (exe, argv, opts) => {
       captured.push({ exe, argv, opts });
@@ -142,14 +161,14 @@ test("Windows 11 diagnostic queries are static, bounded and read-only even when 
     } });
     const { argv, opts } = captured[0];
     const script = Buffer.from(argv[4], "base64").toString("utf16le");
-    assert.match(script, /Get-CimInstance|Get-Process|Get-Service|Get-ScheduledTask/);
+    assert.match(script, /Get-CimInstance|Get-Process|Get-Service|Get-ScheduledTask|Get-Partition/);
     assert.doesNotMatch(script, /\b(?:Set-Item|New-Item|Remove-Item|Invoke-WebRequest|Start-Process|Start-Service|Stop-Service|Restart-Service|Invoke-Expression|Clear-Content|Set-ExecutionPolicy|Win32_Product)\b/i);
     if (name === "pc_install_diagnostics") {
       assert.match(script, /System32\\nvcuda\.dll/);
       assert.match(script, /KTK\\Updater\\status\.json/);
     }
     assert.equal(opts.shell, false);
-    assert.equal(opts.timeout, 30000);
+    assert.equal(opts.timeout, name === "pc_storage_mapping" ? 9000 : 30000);
     assert.equal(opts.maxBuffer, 40960);
     assert.deepEqual(JSON.parse(Buffer.from(opts.env.QWEN_MCP_ARGS_B64, "base64").toString("utf8")), {});
     assert.deepEqual(Object.keys(opts.env).sort(), ["COMPUTERNAME", "PSModulePath", "QWEN_MCP_ARGS_B64", "SystemRoot", "WINDIR", "ProgramFiles", "ProgramData", "PATH"].sort());

@@ -4,11 +4,12 @@ import assert from "node:assert/strict";
 import { createWindowsToolRegistry, runPowerShellQuery } from "../../src/windows/windows-tools.mjs";
 
 const names = ["pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics"];
+const scriptsToParse = [...names, "pc_storage_mapping"];
 if (process.argv.length !== 3 || !["--scripts", "--smoke"].includes(process.argv[2])) throw Error("diagnostic_usage_denied");
 
 if (process.argv[2] === "--scripts") {
   const scripts = [];
-  for (const name of names) {
+  for (const name of scriptsToParse) {
     await runPowerShellQuery(name, {}, { platform: "win32", invoke: async (_file, argv, options) => {
       assert.equal(options.shell, false);
       scripts.push({ name, script: Buffer.from(argv[4], "base64").toString("utf16le") });
