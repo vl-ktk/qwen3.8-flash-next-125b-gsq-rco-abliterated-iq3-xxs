@@ -51,8 +51,8 @@ if (Test-Path -LiteralPath $optInFile) {
     }
 }
 if ($doLocalAI) {
-# Abort before touching the running MCP if the explicitly opted-in AI owner
-# has no known password-free user task. SYSTEM never impersonates that user.
+# An untrusted/missing original-user task cannot perform model work, but does
+# not prevent the independently authorized MCP-only update.
 $taskName = 'KTKQwenUserUpdater'
 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if (-not $task -or @($task.Actions).Count -ne 1 -or
@@ -61,11 +61,38 @@ if (-not $task -or @($task.Actions).Count -ne 1 -or
     $task.Principal.UserId -match '(?i)(?:system|localservice|networkservice)$' -or
     $task.Actions[0].Execute -notmatch '(?i)\\KTK\\UserUpdater\\bin\\node\.exe$' -or
     $task.Actions[0].Arguments -notmatch '(?i)^"[A-Z]:\\[^"\r\n]+\\KTK\\UserUpdater\\Run-KTKUserUpdate\.mjs"$') {
-    throw 'unified_update_user_task_missing_or_untrusted'
+    $doLocalAI = $false
+    Write-Output 'KTK_LOCAL_AI_USER_TASK_UNTRUSTED_MCP_ONLY'
 }
+if ($doLocalAI) {
 $expectedUserScript = Join-Path (Split-Path (Split-Path $task.Actions[0].Execute -Parent) -Parent) 'Run-KTKUserUpdate.mjs'
-if ($task.Actions[0].Arguments -cne ('"' + $expectedUserScript + '"')) { throw 'unified_update_user_task_mismatch' }
+if ($task.Actions[0].Arguments -cne ('"' + $expectedUserScript + '"')) {
+    $doLocalAI = $false
+    Write-Output 'KTK_LOCAL_AI_USER_TASK_MISMATCH_MCP_ONLY'
+}
+}
 
+# A remote MCP update does not replace the per-user task's installed script.
+# Older copies invoke the full Local AI installer, including CUDA inference.
+# Refuse to queue ANY automatic model work until the original user reruns
+# Setup.exe and installs the exact audited no-inference task runner.
+if ($doLocalAI) {
+    $safeRunner = Join-Path $PackagePath 'Run-KTKUserUpdate.mjs'
+    $runnerReady = $false
+    try {
+        $runnerReady = (Test-Path -LiteralPath $expectedUserScript -PathType Leaf) -and
+            ([IO.File]::GetAttributes($expectedUserScript) -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and
+            (Get-FileHash -LiteralPath $expectedUserScript -Algorithm SHA256).Hash -ceq
+            (Get-FileHash -LiteralPath $safeRunner -Algorithm SHA256).Hash
+    } catch { $runnerReady = $false }
+    if (-not $runnerReady) {
+        $doLocalAI = $false
+        Write-Output 'KTK_LOCAL_AI_USER_RUNNER_NEEDS_SETUP_MCP_ONLY'
+    }
+}
+
+$public = $null
+if ($doLocalAI) {
 $public = Join-Path $env:ProgramData 'KTK\Updater\public'
 if (Test-Path -LiteralPath $public) {
     if (-not (Test-Path -LiteralPath $public -PathType Container) -or
@@ -91,6 +118,7 @@ if (Test-Path -LiteralPath $release) {
     & (Join-Path $release 'Verify-KTKPackage.ps1') | Out-Null
     & icacls.exe $release '/T' '/C' '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:RX' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'unified_update_release_acl_failed' }
+}
 }
 }
 

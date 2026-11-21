@@ -57,7 +57,7 @@ export async function verifyUserRelease(root, job, { read = readFile, inspect = 
     const info = await inspect(file);
     if (!info.isFile() || info.isSymbolicLink() || info.size !== item.bytes || await hashFile(file) !== item.sha256) fail("user_update_entry_checksum");
   }
-  for (const required of ["bin/node.exe", "Install-KTKLocalAI.mjs", "runtime/local-ai-setup.mjs", "runtime/sc117-model.lock.json", "runtime/strata-runtime.lock.json"]) {
+  for (const required of ["bin/node.exe", "Install-KTKStrata.mjs", "Prepare-KTKSC117.mjs", "runtime/strata-installer.mjs", "runtime/sc117-model.mjs", "runtime/sc117-model.lock.json", "runtime/strata-runtime.lock.json"]) {
     if (!seen.has(required)) fail("user_update_incomplete_release");
   }
   return manifest;
@@ -86,15 +86,26 @@ export async function runUserUpdate({ platform = process.platform, localAppData 
   const root = path.win32.join(publicDir, `release-${job.version}`);
   await verify(root, job);
   const command = path.win32.join(root, "bin", "node.exe");
-  const script = path.win32.join(root, "Install-KTKLocalAI.mjs");
+  // Never invoke Install-KTKLocalAI.mjs here: that entrypoint deliberately
+  // performs an inference acceptance on *first interactive installation*.
+  // A scheduled MCP update may only verify/prepare the pinned assets.
+  const stages = [
+    ["Install-KTKStrata.mjs", ["--install", "--installer-approved"], ["installed", "already_installed"]],
+    ["Prepare-KTKSC117.mjs", ["--prepare", "--installer-approved"], ["prepared_for_inference_test", "already_prepared_not_rehashed"]],
+  ];
   try {
-    await invoke(command, [script, "--install", "--installer-approved"], {
-      shell: false, windowsHide: true, cwd: root, timeout: 24 * 60 * 60 * 1000,
-      maxBuffer: 16 * 1024, env: { ...process.env, QWEN_MCP_GATEWAY_KEY: "", QWEN_DEVICE_IDENTITY_PATH: "" },
-    });
+    for (const [name, args, statuses] of stages) {
+      const { stdout } = await invoke(command, [path.win32.join(root, name), ...args], {
+        shell: false, windowsHide: true, cwd: root, timeout: 24 * 60 * 60 * 1000,
+        maxBuffer: 16 * 1024, env: { ...process.env, QWEN_MCP_GATEWAY_KEY: "", QWEN_DEVICE_IDENTITY_PATH: "" },
+      });
+      let result;
+      try { result = JSON.parse(stdout); } catch { fail("user_update_prepare_unverified"); }
+      if (!statuses.includes(result?.status)) fail("user_update_prepare_unverified");
+    }
   } catch { fail("user_update_local_ai_failed"); }
   await write(completed, JSON.stringify(job) + "\n", { mode: 0o600 });
-  return { status: "user_components_verified", version: job.version };
+  return { status: "user_components_prepared_no_inference", version: job.version, model_started: false };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) && process.platform === "win32") {

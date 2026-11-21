@@ -63,7 +63,7 @@ jobs:
       - name: Strata installer contracts on native Windows (offline mocks)
         run: node --test src/windows/strata-installer.test.mjs src/windows/sc117-model.test.mjs src/windows/sc117-inference.test.mjs src/windows/local-ai-setup.test.mjs
       - name: Remote updater and native SYSTEM PATH regression (offline)
-        run: node --test src/windows/remote-update.test.mjs src/windows/local-ai-remote.test.mjs scripts/Run-KTKLocalAIJob.test.mjs src/windows/pc-maintenance.test.mjs src/windows/pc-updater-staging.test.mjs src/windows/pc-maintenance.integration.test.mjs
+        run: node --test src/windows/remote-update.test.mjs src/windows/local-ai-remote.test.mjs scripts/Run-KTKUserUpdate.test.mjs scripts/Run-KTKLocalAIJob.test.mjs src/windows/pc-maintenance.test.mjs src/windows/pc-updater-staging.test.mjs src/windows/pc-maintenance.integration.test.mjs
       - name: Native Windows diagnostic tests with strict read-only contracts
         run: node --test src/windows/pc-diagnostics.test.mjs
       - name: Parse all seven embedded Windows 11 diagnostic scripts as PowerShell 5.1 (no execution)
