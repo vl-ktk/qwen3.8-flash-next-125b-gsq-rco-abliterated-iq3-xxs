@@ -379,17 +379,17 @@ const DEFINITIONS = Object.freeze({
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   pc_maintenance_preview: {
-    name: "pc_maintenance_preview", description: "Read-only preview of exact KTK Tunnel service start, delayed autostart configuration or their rollback, including risk and one-use owner chat confirmation. No prompt or action on the PC.",
-    inputSchema: { type: "object", properties: { action: { type: "string", enum: ["start_ktk_tunnel", "rollback_ktk_tunnel", "enable_ktk_tunnel_autostart", "rollback_ktk_tunnel_autostart"] } }, required: ["action"], additionalProperties: false },
+    name: "pc_maintenance_preview", description: "Read-only preview of fixed verified KTK-only service startup/rollback and reversible HMAC-owned stale updater staging quarantine/restore. No Windows PC prompts, arbitrary paths or model operations. Quarantine never frees disk space.",
+    inputSchema: { type: "object", properties: { action: { type: "string", enum: ["start_ktk_tunnel", "rollback_ktk_tunnel", "enable_ktk_tunnel_autostart", "rollback_ktk_tunnel_autostart", "enable_ktk_mcp_autostart", "rollback_ktk_mcp_autostart", "enable_ktk_updater_autostart", "rollback_ktk_updater_autostart", "quarantine_ktk_staging", "restore_ktk_staging"] } }, required: ["action"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false },
   },
   pc_maintenance_apply: {
-    name: "pc_maintenance_apply", description: "Apply one recently previewed KTK Tunnel service operation after separate explicit OWNER confirmation in chat. Executes through privileged, allowlisted SYSTEM updater; NO local PC approvals. Never accepts commands, arbitrary paths or model actions.",
+    name: "pc_maintenance_apply", description: "Apply one recently previewed fixed KTK-only service/autostart or reversible updater-staging operation after separate explicit OWNER confirmation in chat. Runs via restricted SYSTEM updater without local PC approval. Cannot execute arbitrary commands, remove files or start model.",
     inputSchema: { type: "object", properties: { plan_id: { type: "string", pattern: "^[a-f0-9]{32}$" }, confirmation: { type: "string", pattern: "^CONFIRM KTK MAINTENANCE [a-f0-9]{32}$" } }, required: ["plan_id", "confirmation"], additionalProperties: false },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   pc_maintenance_status: {
-    name: "pc_maintenance_status", description: "Read KTK-only maintenance receipt status and whether a verified one-step tunnel rollback is available. No PC modifications.",
+    name: "pc_maintenance_status", description: "Read KTK-only maintenance receipt status and whether the most recent confirmed service/staging operation can be rolled back. No PC modifications.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },

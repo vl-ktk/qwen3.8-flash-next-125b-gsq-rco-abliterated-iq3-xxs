@@ -20,7 +20,7 @@ async function fixture(t) {
   await mkdir(path.join(sourceRoot, "src/windows"), { recursive: true });
   await mkdir(path.join(sourceRoot, "scripts"), { recursive: true });
   await mkdir(path.join(sourceRoot, "config"), { recursive: true });
-  for (const name of ["admin-cli", "administration", "device-identity", "device-bootstrap", "device-enrollment", "device-selftest", "device-revocation", "emergency-lock", "main", "mcp-server", "model-preflight", "pc-diagnostics", "pc-maintenance", "monitoring", "origin-auth", "windows-tools", "strata-installer", "sc117-model", "sc117-inference", "local-ai-setup", "remote-update"]) {
+  for (const name of ["admin-cli", "administration", "device-identity", "device-bootstrap", "device-enrollment", "device-selftest", "device-revocation", "emergency-lock", "main", "mcp-server", "model-preflight", "pc-diagnostics", "pc-maintenance", "pc-updater-staging", "monitoring", "origin-auth", "windows-tools", "strata-installer", "sc117-model", "sc117-inference", "local-ai-setup", "remote-update"]) {
     await writeFile(path.join(sourceRoot, `src/windows/${name}.mjs`), `export const ${name.replace(/-/g, "_")} = true;\n`);
   }
   await writeFile(path.join(sourceRoot, "src/windows/strata-runtime.lock.json"), '{}\n');
@@ -78,7 +78,7 @@ async function fixture(t) {
 test("step 15 payload is reproducible, manifest-verified, without secrets or install actions", async t => {
   const f = await fixture(t);
   const result = await buildWindowsPackage(f);
-  assert.equal(result.fileCount, 60);
+  assert.equal(result.fileCount, 61);
   assert.equal(result.manifest.ready_for_installation, false);
   assert.equal(result.manifest.source_commit, f.sourceSha);
   assert.equal(result.manifest.target, "windows-x64");
@@ -88,11 +88,12 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(result.sha256, await sha256File(f.outFile));
   assert.equal((await readFile(f.outFile + ".sha256", "utf8")).trim(), `${result.sha256}  ${path.basename(f.outFile)}`);
   const zipFiles = (await run("unzip", ["-Z1", f.outFile])).stdout.trim().split("\n");
-  assert.equal(zipFiles.length, 60);
+  assert.equal(zipFiles.length, 61);
   assert.equal(zipFiles.includes("runtime/main.mjs"), true);
   assert.equal(zipFiles.includes("runtime/model-preflight.mjs"), true);
   assert.equal(zipFiles.includes("runtime/pc-diagnostics.mjs"), true);
   assert.equal(zipFiles.includes("runtime/pc-maintenance.mjs"), true);
+  assert.equal(zipFiles.includes("runtime/pc-updater-staging.mjs"), true);
   assert.equal(zipFiles.includes("runtime/strata-installer.mjs"), true);
   assert.equal(zipFiles.includes("runtime/strata-runtime.lock.json"), true);
   assert.equal(zipFiles.includes("runtime/sc117-model.mjs"), true);
@@ -133,7 +134,7 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(zipFiles.some(name => /(?:^|\/)\.env(?:$|\.)|\.test\.mjs$|key\.pem|private|\.git|token/i.test(name)), false);
   assert.doesNotMatch((await readZip(f.outFile, "README.txt")).toString("utf8"), /DO_NOT_BUNDLE_SECRET/);
   const manifest = JSON.parse(await readZip(f.outFile, "MANIFEST.json"));
-  assert.equal(manifest.files.length, 58);
+  assert.equal(manifest.files.length, 59);
   for (const record of manifest.files) assert.equal(fakeHash(await readZip(f.outFile, record.path)), record.sha256);
   await assert.rejects(() => buildWindowsPackage(f), /package_output_exists/);
   const other = { ...f, outFile: path.join(f.root, "out", "second.zip") };

@@ -156,18 +156,19 @@ test("native SCM adapter invokes only absolute sc.exe and rejects foreign servic
   const adapter = createWindowsTunnelAdapter({ platform: "win32", windowsRoot: "C:\\Windows", programFiles: "C:\\Program Files",
     invokeCommand: async (exe, args, opts) => {
       commands.push({ exe, args, opts });
-      return { stdout: args[0] === "qc" ? `SERVICE_NAME: KTKQwenTunnel\n BINARY_PATH_NAME : "C:\\Program Files\\KTK\\QwenMCP\\KTKQwenTunnel.exe"\n START_TYPE : 3 DEMAND_START\n` :
+      return { stdout: args[0] === "qc" ? `SERVICE_NAME: KTKQwenTunnel\n BINARY_PATH_NAME : "C:\\Program Files\\KTK\\QwenMCP\\KTKQwenTunnel.exe"\n SERVICE_START_NAME : NT AUTHORITY\\LocalService\n START_TYPE : 3 DEMAND_START\n` :
         `SERVICE_NAME: KTKQwenTunnel\n STATE : 1 STOPPED\n` };
     } });
   const snapshot = await adapter.queryService();
   assert.deepEqual(snapshot, good());
   await adapter.startService();
   await adapter.stopService();
-  await adapter.configureService(null, "Automatic");
-  await adapter.configureService(null, "Manual");
+  await adapter.configureService("KTKQwenTunnel", "Automatic");
+  await adapter.configureService("KTKQwenTunnel", "Manual");
   assert.deepEqual(commands.map(c => c.args), [["qc", "KTKQwenTunnel"], ["query", "KTKQwenTunnel"], ["start", "KTKQwenTunnel"], ["stop", "KTKQwenTunnel"],
     ["config", "KTKQwenTunnel", "start=", "delayed-auto"], ["config", "KTKQwenTunnel", "start=", "demand"]]);
-  await assert.rejects(() => adapter.configureService(null, "disabled"), /invalid_maintenance_action/);
+  await assert.rejects(() => adapter.configureService("KTKQwenTunnel", "disabled"), /invalid_maintenance_action/);
+  await assert.rejects(() => adapter.configureService("WinDefend", "Automatic"), /invalid_maintenance_action/);
   for (const c of commands) { assert.equal(c.exe, "C:\\Windows\\System32\\sc.exe"); assert.equal(c.opts.shell, false); }
   assert.throws(() => createWindowsTunnelAdapter({ platform: "linux" }), /maintenance_windows_only/);
 });
@@ -175,7 +176,64 @@ test("native SCM adapter invokes only absolute sc.exe and rejects foreign servic
 test("Windows 11 delayed-auto KTK tunnel SCM response is recognized without weakening binary ownership", async () => {
   const adapter = createWindowsTunnelAdapter({ platform: "win32", windowsRoot: "C:\\Windows", programFiles: "C:\\Program Files",
     invokeCommand: async (_exe, args) => ({ stdout: args[0] === "qc" ?
-      'BINARY_PATH_NAME : "C:\\Program Files\\KTK\\QwenMCP\\KTKQwenTunnel.exe"\r\n START_TYPE : 2 AUTO_START (DELAYED)\r\n' :
+      'BINARY_PATH_NAME : "C:\\Program Files\\KTK\\QwenMCP\\KTKQwenTunnel.exe"\r\n SERVICE_START_NAME : NT AUTHORITY\\LocalService\r\n START_TYPE : 2 AUTO_START (DELAYED)\r\n' :
       'STATE : 4 RUNNING\r\n' }) });
   assert.deepEqual(await adapter.queryService(), { name: "KTKQwenTunnel", status: "Running", start_type: "Automatic", owner_verified: true });
+});
+
+test("verified MCP/Updater WinSW autostart is reversible without stopping either service or loading local AI", async () => {
+  for (const [action, reverse, target] of [
+    ["enable_ktk_mcp_autostart", "rollback_ktk_mcp_autostart", "KTKQwenMCP"],
+    ["enable_ktk_updater_autostart", "rollback_ktk_updater_autostart", "KTKQwenUpdater"],
+  ]) {
+    let type = "Manual"; let receipt = null; const commands = [];
+    const ctl = createPcMaintenanceController({
+      queryService: async name => ({ name, owner_verified: true, status: "Running", start_type: type }),
+      startService: async name => { throw Error(`Unexpected start ${name}`); },
+      stopService: async name => { throw Error(`Unexpected stop ${name}`); },
+      configureService: async (name, next) => { commands.push({ name, next }); type = next; },
+      readReceipt: async () => receipt, writeReceipt: async value => { receipt = value; },
+    });
+    const preview = await ctl.preview({ action });
+    assert.equal(preview.service, target);
+    assert.equal(preview.requires_pc_confirmation, false);
+    const applied = await ctl.apply({ plan_id: preview.plan_id, confirmation: preview.owner_chat_confirmation });
+    assert.equal(applied.rollback_action, reverse);
+    assert.equal(receipt.service, target);
+    const undo = await ctl.preview({ action: reverse });
+    assert.equal((await ctl.apply({ plan_id: undo.plan_id, confirmation: undo.owner_chat_confirmation })).restored_start_type, "Manual");
+    assert.deepEqual(commands, [{ name: target, next: "Automatic" }, { name: target, next: "Manual" }]);
+  }
+});
+
+test("native SCM rejects an untrusted MCP/Updater binary path before any privileged config", async () => {
+  for (const target of ["KTKQwenMCP", "KTKQwenUpdater"]) {
+    let configCalls = 0;
+    const adapter = createWindowsTunnelAdapter({ platform: "win32", windowsRoot: "C:\\Windows", programFiles: "C:\\Program Files",
+      invokeCommand: async (_exe, args) => {
+        if (args[0] === "config") configCalls++;
+        return { stdout: args[0] === "qc" ?
+          `BINARY_PATH_NAME : "C:\\Windows\\System32\\untrusted.exe"\nSTART_TYPE : 3 DEMAND_START\n` :
+          `STATE : 4 RUNNING\n` };
+      } });
+    const ctl = createPcMaintenanceController({ ...adapter });
+    await assert.rejects(ctl.preview({ action: target === "KTKQwenMCP" ? "enable_ktk_mcp_autostart" : "enable_ktk_updater_autostart" }), /ktk_service_not_trusted/);
+    assert.equal(configCalls, 0);
+  }
+});
+
+test("Windows SCM service ownership requires the exact KTK WinSW path AND service account", async () => {
+  for (const [name, file, identity] of [
+    ["KTKQwenMCP", "C:\\Program Files\\KTK\\QwenMCP\\KTKQwenMCP.exe", "NT AUTHORITY\\LocalService"],
+    ["KTKQwenUpdater", "C:\\Program Files\\KTK\\Updater\\KTKQwenUpdater.exe", "LocalSystem"],
+  ]) {
+    let startName = identity;
+    const adapter = createWindowsTunnelAdapter({ platform: "win32", programFiles: "C:\\Program Files",
+      invokeCommand: async (_exe, args) => ({ stdout: args[0] === "qc" ?
+        `BINARY_PATH_NAME : "${file}"\nSERVICE_START_NAME : ${startName}\nSTART_TYPE : 3 DEMAND_START\n` :
+        `STATE : 4 RUNNING\n` }) });
+    assert.equal((await adapter.queryService(name)).owner_verified, true);
+    startName = name === "KTKQwenMCP" ? "LocalSystem" : "NT AUTHORITY\\LocalService";
+    assert.equal((await adapter.queryService(name)).owner_verified, false);
+  }
 });

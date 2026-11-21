@@ -205,6 +205,15 @@ test("privileged PC maintenance requires its own OAuth scope, never merely read 
     assert.equal(response.status, 200);
   }
   assert.equal(f.calls.length, 2);
+  // New privileged actions are visible for read-only preview, but still
+  // cannot be applied with the read/update scopes or arbitrary path fields.
+  for (const action of ["enable_ktk_mcp_autostart", "enable_ktk_updater_autostart", "quarantine_ktk_staging"]) {
+    const preview = await f.mcp(read.access_token, "tools/call", { name: "pc_maintenance_preview", arguments: { action } });
+    assert.equal(preview.status, 200);
+  }
+  assert.equal(f.calls.length, 5);
+  assert.equal((await f.mcp(read.access_token, "tools/call", mutation)).status, 403);
+  assert.equal((await f.mcp(maintenance.access_token, "tools/call", { name: "pc_maintenance_preview", arguments: { action: "quarantine_ktk_staging", path: "C:\\Users" } })).status, 400);
   const applied = await f.mcp(maintenance.access_token, "tools/call", mutation);
   assert.equal(applied.status, 200, await applied.clone().text());
   assert.deepEqual(JSON.parse(f.calls.at(-1).body).params, mutation);

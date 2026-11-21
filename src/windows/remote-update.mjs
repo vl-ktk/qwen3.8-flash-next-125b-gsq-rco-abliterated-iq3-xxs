@@ -7,6 +7,7 @@ import path from "node:path";
 import { createOriginVerifier, decodeGatewayKey } from "./origin-auth.mjs";
 import { createPcMaintenanceController, createWindowsTunnelAdapter,
   validateMaintenancePreview, validateMaintenanceApply } from "./pc-maintenance.mjs";
+import { markKtkUpdateStage, createKtkStageAdapter } from "./pc-updater-staging.mjs";
 
 const exec = promisify(execFile);
 const VERSION = /^0\.18\.[1-9]\d{0,3}$/;
@@ -136,11 +137,13 @@ export function createMaintenanceEnvironment(source = process.env) {
   };
 }
 
-export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, download = downloadVerifiedRelease, invoke = exec } = {}) {
+export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, stageOwnerKey = null,
+  download = downloadVerifiedRelease, invoke = exec } = {}) {
   validateUpdateOffer(offer);
   const temp = await mkdtemp(path.join(dataRoot, "update-"));
   const bundle = path.join(temp, "artifact.zip");
   try {
+    if (stageOwnerKey) await markKtkUpdateStage(temp, stageOwnerKey);
     try { await download(offer, bundle); }
     catch (error) {
       if (typeof error?.code === "string" && /^update_[a-z_]+$/.test(error.code)) throw error;
@@ -228,7 +231,7 @@ export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1",
       await report({ status: "running", version: offer.version });
       const startedAt = state.at;
       reply(202, { status: "accepted", version: offer.version });
-      Promise.resolve().then(() => apply(offer, { updaterRoot, dataRoot })).then(
+      Promise.resolve().then(() => apply(offer, { updaterRoot, dataRoot, stageOwnerKey: keyText })).then(
         result => report({ status: result?.status === "user_pending" ? "user_pending" : "updated", version: offer.version, started_at: startedAt }),
         error => report({ status: "failed", version: offer.version,
           code: typeof error?.code === "string" && /^[a-z][a-z0-9_]{2,120}$/.test(error.code) ? error.code : "update_failed",
@@ -311,7 +314,8 @@ export async function runUpdaterService() {
     initialStatus = { status: "failed", code: "updater_interrupted" };
   }
   const tunnelAdapter = createWindowsTunnelAdapter();
-  const pcMaintenance = createPcMaintenanceController({ ...tunnelAdapter, ...createPrivateMaintenanceReceiptStore(dataRoot) });
+  const pcMaintenance = createPcMaintenanceController({ ...tunnelAdapter,
+    staging: createKtkStageAdapter({ dataRoot, keyText }), ...createPrivateMaintenanceReceiptStore(dataRoot) });
   const server = createUpdaterServer({ keyText, updaterRoot, dataRoot, initialStatus,
     checkUser: inspectFixedUserTask, resumeUser: runFixedUserTask, pcMaintenance });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(18765, "127.0.0.1", resolve); });
