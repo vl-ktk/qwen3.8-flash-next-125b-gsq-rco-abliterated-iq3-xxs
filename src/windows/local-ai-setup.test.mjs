@@ -79,6 +79,33 @@ test("pausing one attempt and resuming another retains the explicit one-time acc
   assert.equal(f.calls.filter(step => step === "inference").length, 1);
 });
 
+test("a previously interrupted owned Strata install is recovered before inference and retried once", async t => {
+  let starts = 0;
+  const f = await fixture(t, {
+    installRuntime: async () => {
+      f.calls.push("strata");
+      if (++starts === 1) throw Object.assign(Error("incomplete"), { code: "strata_existing_install_unrecognized" });
+      return { status: "installed" };
+    },
+    recoverRuntime: async ({ ownerApproved }) => {
+      assert.equal(ownerApproved, true);
+      f.calls.push("recover");
+      return { status: "incomplete_install_removed" };
+    },
+  });
+  assert.equal((await runLocalAiSetup(f.opts)).runtime_state, "stopped");
+  assert.deepEqual(f.calls, ["lock", "strata", "recover", "strata", "model", "inference", "unlock"]);
+});
+
+test("unrecognized Strata tree is never erased or passed to inference", async t => {
+  const f = await fixture(t, {
+    installRuntime: async () => { f.calls.push("strata"); throw Object.assign(Error("unrecognized"), { code: "strata_existing_install_unrecognized" }); },
+    recoverRuntime: async () => { f.calls.push("recover"); throw Object.assign(Error("untrusted"), { code: "strata_recovery_denied" }); },
+  });
+  await assert.rejects(runLocalAiSetup(f.opts), /strata_recovery_denied/);
+  assert.deepEqual(f.calls, ["lock", "strata", "recover", "unlock"]);
+});
+
 test("cancel timer aborts stalled model download and never starts inference", async t => {
   const f = await fixture(t, {
     cancelRequested: async () => f.calls.includes("model"),

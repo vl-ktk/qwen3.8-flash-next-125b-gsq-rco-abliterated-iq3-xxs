@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createWindowsToolRegistry } from "./windows-tools.mjs";
-import { strataInstallRoot, installStrata } from "./strata-installer.mjs";
+import { strataInstallRoot, installStrata, recoverIncompleteStrata } from "./strata-installer.mjs";
 import { prepareSc117Model, sc117Plan } from "./sc117-model.mjs";
 import { testSc117Inference } from "./sc117-inference.mjs";
 
@@ -89,7 +89,8 @@ export async function localAiCancelRequested(folder, runId) {
 
 export async function runLocalAiSetup({ approved = false, platform = process.platform, arch = process.arch,
   localAppData = process.env.LOCALAPPDATA, statusDir = null, inventory = queryLocalAiPreflight,
-  installRuntime = installStrata, prepareModel = prepareSc117Model, testInference = testSc117Inference,
+  installRuntime = installStrata, recoverRuntime = recoverIncompleteStrata,
+  prepareModel = prepareSc117Model, testInference = testSc117Inference,
   acquireLock = acquireLocalAiSetupLock, reportFactory = statusReporter,
   cancelRequested = localAiCancelRequested,
   timeNow = () => Date.now() } = {}) {
@@ -124,8 +125,20 @@ export async function runLocalAiSetup({ approved = false, platform = process.pla
       drives, download_bytes: sc117Plan().model_and_mtp_bytes });
 
     stage = "strata";
-    const strata = await installRuntime({ ownerApproved: true, localAppData,
+    const installPinnedRuntime = () => installRuntime({ ownerApproved: true, localAppData,
       onStage: name => update("strata_" + name, name === "ready" || name === "already_installed" ? 21 : 12) });
+    let strata;
+    try { strata = await installPinnedRuntime(); }
+    catch (error) {
+      // A prior crash may leave the *owned* Strata tree in installing state.
+      // The recovery helper validates exact KTK marker/version/nonce and will
+      // NEVER remove a ready, foreign or unrecognized Strata installation.
+      if (error?.code !== "strata_existing_install_unrecognized") throw error;
+      await update("strata_recovery", 10);
+      const recovered = await recoverRuntime({ ownerApproved: true, localAppData, platform, arch });
+      if (recovered?.status !== "incomplete_install_removed") fail("localai_strata_recovery_unconfirmed");
+      strata = await installPinnedRuntime();
+    }
     if (!strata || !["installed", "already_installed"].includes(strata.status)) fail("localai_strata_incomplete");
     await update("strata_ready", 22);
 

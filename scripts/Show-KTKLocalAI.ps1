@@ -105,6 +105,7 @@ $script:shownUtc = [DateTime]::UtcNow
 $phaseNames = @{
     preflight = 'Проверка Windows, RAM, VRAM и дисков'
     preflight_complete = 'Проверка ПК пройдена'
+    strata_recovery = 'Восстановление прерванной установки Strata (только файлы KTK)'
     strata_ready = 'Strata готова'
     sc117_downloading = 'Загрузка модели с проверкой SHA-256'
     sc117_ready = 'Файлы модели подготовлены'
