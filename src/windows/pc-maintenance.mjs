@@ -70,9 +70,10 @@ export function createPcMaintenanceController({
     const reason = isNew ? active ? "previous_maintenance_active" :
       isStart ? current.status !== "Stopped" ? "tunnel_not_stopped" : null :
         current.status !== "Running" || current.start_type !== "Manual" ? "tunnel_not_running_manual" : null :
-      !previous || previous.status !== "applied" ? "no_reversible_maintenance" :
+      !previous || !["pending", "applied", "rolling_back"].includes(previous.status) ? "no_reversible_maintenance" :
         previous.action !== (action === "rollback_ktk_tunnel" ? "start_ktk_tunnel" : "enable_ktk_tunnel_autostart") ? "different_rollback_action" :
-          current.status !== "Running" || (previous.action === "enable_ktk_tunnel_autostart" && current.start_type !== "Automatic") ? "service_state_changed" : null;
+          previous.action === "start_ktk_tunnel" ? current.start_type !== previous.before_start_type ? "service_state_changed" : null :
+            current.status !== "Running" || !["Manual", "Automatic"].includes(current.start_type) ? "service_state_changed" : null;
     const details = {
       status: reason ? "blocked" : "ready_for_owner_confirmation", action,
       service: SERVICE, current_state: current.status, current_start_type: current.start_type, reason,
@@ -125,11 +126,13 @@ export function createPcMaintenanceController({
           before: tx.before, after: final.status, before_start_type: tx.before_start_type, after_start_type: final.start_type,
           rollback_action: entry.action === "start_ktk_tunnel" ? "rollback_ktk_tunnel" : "rollback_ktk_tunnel_autostart" };
       }
-      if (!previous || previous.status !== "applied" || previous.transaction_id !== entry.transaction_id || current.status !== "Running" ||
+      if (!previous || !["pending", "applied", "rolling_back"].includes(previous.status) || previous.transaction_id !== entry.transaction_id ||
           previous.action !== (entry.action === "rollback_ktk_tunnel" ? "start_ktk_tunnel" : "enable_ktk_tunnel_autostart")) fail("maintenance_rollback_unavailable");
+      if (previous.action === "start_ktk_tunnel" && current.start_type !== previous.before_start_type ||
+          previous.action === "enable_ktk_tunnel_autostart" && current.status !== "Running") fail("maintenance_rollback_unavailable");
       await writeReceipt({ ...previous, status: "rolling_back" });
-      if (entry.action === "rollback_ktk_tunnel") await stopService(SERVICE);
-      else await configureService(SERVICE, "Manual");
+      if (entry.action === "rollback_ktk_tunnel" && current.status !== "Stopped") await stopService(SERVICE);
+      else if (entry.action === "rollback_ktk_tunnel_autostart" && current.start_type !== "Manual") await configureService(SERVICE, "Manual");
       const restored = await service();
       if (entry.action === "rollback_ktk_tunnel" ? restored.status !== "Stopped" :
         restored.status !== "Running" || restored.start_type !== "Manual") fail("maintenance_verification_failed");
@@ -141,7 +144,7 @@ export function createPcMaintenanceController({
   const status = async () => {
     const latest = await receipt();
     return { status: latest?.status ?? "no_previous_maintenance", service: SERVICE,
-      transaction_id: latest?.transaction_id ?? null, rollback_available: latest?.status === "applied" };
+      transaction_id: latest?.transaction_id ?? null, rollback_available: ["pending", "applied", "rolling_back"].includes(latest?.status) };
   };
   return { preview: plan, apply, status, isBusy: () => busy };
 }

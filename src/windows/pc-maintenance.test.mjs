@@ -102,7 +102,7 @@ test("expired owner plans, state changes and negative permissions fail closed", 
   assert.equal(f.change(), 0);
 });
 
-test("receipt intent survives failed service start and blocks a new action until manual inspection", async () => {
+test("receipt intent survives failed service start and remote rollback recovers without local PC intervention", async () => {
   let receipt = null;
   const ctl = createPcMaintenanceController({ queryService: async () => good(),
     startService: async () => { throw Error("super-secret native stderr"); }, stopService: async () => {},
@@ -110,7 +110,30 @@ test("receipt intent survives failed service start and blocks a new action until
   const p = await ctl.preview({ action: "start_ktk_tunnel" });
   await assert.rejects(ctl.apply({ plan_id: p.plan_id, confirmation: p.owner_chat_confirmation }));
   assert.equal(receipt.status, "pending");
+  assert.equal((await ctl.status()).rollback_available, true);
   assert.equal((await ctl.preview({ action: "start_ktk_tunnel" })).reason, "previous_maintenance_active");
+  const recover = await ctl.preview({ action: "rollback_ktk_tunnel" });
+  assert.equal(recover.status, "ready_for_owner_confirmation");
+  const restored = await ctl.apply({ plan_id: recover.plan_id, confirmation: recover.owner_chat_confirmation });
+  assert.equal(restored.status, "rolled_back");
+  assert.equal(receipt.status, "rolled_back");
+});
+
+test("partially changed KTK autostart is remotely reversible after a simulated SYSTEM failure", async () => {
+  let type = "Manual"; let receipt = null;
+  const ctl = createPcMaintenanceController({
+    queryService: async () => ({ name: "KTKQwenTunnel", owner_verified: true, status: "Running", start_type: type }),
+    startService: async () => {}, stopService: async () => {},
+    configureService: async (_name, next) => { type = next; if (next === "Automatic") throw Error("native-command-failed-after-change"); },
+    readReceipt: async () => receipt, writeReceipt: async next => { receipt = next; },
+  });
+  const p = await ctl.preview({ action: "enable_ktk_tunnel_autostart" });
+  await assert.rejects(ctl.apply({ plan_id: p.plan_id, confirmation: p.owner_chat_confirmation }));
+  assert.equal(receipt.status, "pending");
+  assert.equal(type, "Automatic");
+  const recover = await ctl.preview({ action: "rollback_ktk_tunnel_autostart" });
+  assert.equal((await ctl.apply({ plan_id: recover.plan_id, confirmation: recover.owner_chat_confirmation })).restored_start_type, "Manual");
+  assert.equal(receipt.status, "rolled_back");
 });
 
 test("rejects arbitrary commands, service names, paths and malformed or repeated plan IDs", () => {
