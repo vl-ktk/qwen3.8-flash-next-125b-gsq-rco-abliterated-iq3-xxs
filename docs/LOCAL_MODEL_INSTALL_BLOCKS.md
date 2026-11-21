@@ -2,7 +2,7 @@
 
 ## Target and sources (verified 2026-11-20)
 
-- Machine **to be installed later**: Windows, i9-12900K, RTX 3090 Ti 24 GiB VRAM, 64 GiB RAM, NVMe drives C: and D: (actual disk space and installed software not yet measured).
+- Machine **to be installed later**: **Windows 11** (explicitly confirmed by the owner on 21.11.2026), i9-12900K, RTX 3090 Ti 24 GiB VRAM, 64 GiB RAM, NVMe drives C: and D: (actual disk space and installed software not yet measured).
 - Exact model: `SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF`, `IQ3_XXS`, both shards. Model repository rounds them to **47.34 GB + 28.80 GB = 76.14 GB**: https://huggingface.co/SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF
 - Engine: Strata. This **particular** abliterated model needs its *own* native pack generated from its GGUF; an official-model pack has incompatible offsets. Also fetch the published Strata MTP runtime (`strata/rt`). Source: https://huggingface.co/SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF/blob/main/strata/README.md
 - **130 GB recommended free on one fixed volume** is a conservative planning allowance, not an upstream minimum or a promise of successful download/pack. The true required space must be measured during B/C before downloading. Storage-bus inventory alone cannot map a specific drive letter to an NVMe device.
