@@ -126,6 +126,27 @@ test("Windows recovery gate accepts the current packaged installer version", () 
   assert.ok(setup.includes(`OutputBaseFilename=KTK-Qwen-MCP-Setup-${packageLock.package_version}-TEST-UNSIGNED`));
 });
 
+test("Windows QA builds only one consistent numbered unsigned installer and requires an explicit main push for prerelease", () => {
+  const version = packageLock.package_version;
+  const zip = `KTK-Windows-MCP-${version}-win-x64.zip`;
+  const exe = `KTK-Qwen-MCP-Setup-${version}-TEST-UNSIGNED.exe`;
+  assert.match(version, /^0\.18\.[1-9]\d*$/);
+  assert.ok(windowsCi.includes(`.generated/packages/${zip}`));
+  assert.ok(windowsCi.includes(`candidate/${zip}`));
+  assert.ok(windowsCi.includes(`candidate/setup/${exe}`));
+  for (const candidate of windowsCi.matchAll(/KTK-Windows-MCP-(0\.18\.\d+)-win-x64\.zip/g)) {
+    assert.equal(candidate[1], version, "candidate zip version diverges from the package lock");
+  }
+  for (const candidate of windowsCi.matchAll(/KTK-Qwen-MCP-Setup-(0\.18\.\d+)-TEST-UNSIGNED\.exe/g)) {
+    assert.equal(candidate[1], version, "candidate setup version diverges from the package lock");
+  }
+  const releaseCi = readFileSync(new URL("../../.github/workflows/verified-update-release.yml", import.meta.url), "utf8");
+  assert.match(releaseCi, /push:\s*\n\s*branches:\s*\[main\]/);
+  assert.match(releaseCi, /paths:\s*\["config\/windows-package\.lock\.json"\]/);
+  assert.match(releaseCi, /--prerelease/);
+  assert.doesNotMatch(windowsCi, /gh release create|wrangler deploy(?!\s+--dry-run)/);
+});
+
 test("one-time user task runs only in the original non-elevated login without passwords", () => {
   const script = readFileSync(new URL("../../scripts/Install-KTKUserUpdater.ps1", import.meta.url), "utf8");
   assert.match(script, /S-1-5-18/);

@@ -11,7 +11,7 @@
 [Setup]
 AppId={{F087E1C8-6597-4DE8-960B-38D903A6E3BE}
 AppName=KTK Qwen MCP (Acceptance Candidate)
-AppVersion=0.18.20
+AppVersion=0.18.21
 AppPublisher=KTK
 DefaultDirName={autopf}\KTK\QwenMCP
 CreateAppDir=no
@@ -25,7 +25,7 @@ DisableProgramGroupPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=no
 OutputDir={#OutputRoot}
-OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.20-TEST-UNSIGNED
+OutputBaseFilename=KTK-Qwen-MCP-Setup-0.18.21-TEST-UNSIGNED
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
