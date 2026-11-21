@@ -11,7 +11,7 @@ const SOURCE_FILES = Object.freeze([
   "src/windows/device-enrollment.mjs", "src/windows/device-selftest.mjs",
   "src/windows/device-revocation.mjs",
   "src/windows/emergency-lock.mjs",
-  "src/windows/main.mjs", "src/windows/mcp-server.mjs", "src/windows/model-preflight.mjs",
+  "src/windows/main.mjs", "src/windows/mcp-server.mjs", "src/windows/model-preflight.mjs", "src/windows/pc-diagnostics.mjs",
   "src/windows/strata-installer.mjs", "src/windows/strata-runtime.lock.json",
   "src/windows/sc117-model.mjs", "src/windows/sc117-model.lock.json",
   "src/windows/sc117-inference.mjs",

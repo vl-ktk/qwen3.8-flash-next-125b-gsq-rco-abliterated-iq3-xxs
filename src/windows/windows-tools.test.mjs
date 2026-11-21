@@ -8,10 +8,10 @@ import { listenWindowsMcp } from "./mcp-server.mjs";
 
 test("read-only allowlist has stable schemas; no arbitrary command, script, write or service control", () => {
   const tools = createWindowsToolRegistry();
-  assert.deepEqual(tools.list().map(item => item.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan"]);
+  assert.deepEqual(tools.list().map(item => item.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report"]);
   assert.equal(tools.has("powershell"), false);
   assert.equal(tools.has("file_read"), false); // default-deny until installer configures roots
-  for (const name of ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan"]) {
+  for (const name of ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report"]) {
     const definition = tools.list().find(item => item.name === name);
     assert.equal(definition.annotations.readOnlyHint, true);
     assert.equal(definition.inputSchema.additionalProperties, false);
@@ -62,6 +62,12 @@ test("injection, wildcard, arbitrary args and resource-abuse inputs fail before 
     ["pc_preflight", { command: "whoami" }],
     ["storage_check", { volume: "C:" }],
     ["runtime_check", { script: "curl" }],
+    ["pc_full_audit", { command: "whoami" }],
+    ["pc_gpu_audit", { driver: "latest" }],
+    ["pc_storage_audit", { drive: "D:" }],
+    ["pc_memory_audit", { clear: true }],
+    ["pc_install_diagnostics", { repair: true }],
+    ["pc_readiness_report", { install: true }],
     ["installation_plan", { install: true }],
     ["process_list", { limit: 0 }],
     ["process_list", { limit: 5000 }],

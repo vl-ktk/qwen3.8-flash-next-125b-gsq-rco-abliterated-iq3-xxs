@@ -6,6 +6,7 @@ import path from "node:path";
 import { collectWindowsMonitoring, queryNvidiaGpus } from "./monitoring.mjs";
 import { getAdminStatus, WINDOWS_MCP_VERSION } from "./administration.mjs";
 import { normalizePcPreflight, normalizeStorageCheck, normalizeRuntimeCheck, buildInstallationPlan } from "./model-preflight.mjs";
+import { normalizePcFullAudit, normalizePcGpuAudit, normalizePcStorageAudit, normalizePcMemoryAudit, normalizePcInstallDiagnostics, buildPcReadinessReport } from "./pc-diagnostics.mjs";
 import { callLocalUpdater, validateUpdateOffer } from "./remote-update.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -134,12 +135,126 @@ $running = @(Get-Process -Name 'strata','strata-server' -ErrorAction SilentlyCon
 [pscustomobject]@{ machine_installs = $installed; running_processes = $running } |
   ConvertTo-Json -Depth 5 -Compress
 `,
+  pc_full_audit: PREFIX + `
+$os = Get-CimInstance Win32_OperatingSystem
+$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+$machine = Get-CimInstance Win32_ComputerSystem
+$memory = $null
+try { $memory = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop } catch {}
+$pagefiles = @()
+try { $pagefiles = @(Get-CimInstance Win32_PageFileUsage -ErrorAction Stop | Select-Object -First 8 |
+  ForEach-Object { [pscustomobject]@{ allocated_mb=$_.AllocatedBaseSize; used_mb=$_.CurrentUsage } }) } catch {}
+$pending = $null
+try {
+  $pending = (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') -or
+    (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired')
+  $rename = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue)
+  if ($null -ne $rename) { $pending = $true }
+} catch { $pending = $null }
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+[pscustomobject]@{
+  os=$os.Caption; os_version=$os.Version; os_build=$os.BuildNumber; architecture=$os.OSArchitecture
+  processor=$cpu.Name; cores=$cpu.NumberOfCores; threads=$cpu.NumberOfLogicalProcessors
+  ram_total_bytes=$machine.TotalPhysicalMemory; ram_free_bytes=([int64]$os.FreePhysicalMemory * 1024)
+  committed_bytes=$(if ($memory) { $memory.CommittedBytes } else { $null })
+  commit_limit_bytes=$(if ($memory) { $memory.CommitLimit } else { $null })
+  pagefiles=$pagefiles; pending_reboot=$pending
+  session_zero=([System.Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0)
+  admin_token=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} | ConvertTo-Json -Depth 5 -Compress
+`,
+  pc_gpu_audit: PREFIX + `
+$drivers = @()
+try {
+  $drivers = @(Get-CimInstance Win32_VideoController -ErrorAction Stop | Select-Object -First 8 |
+    ForEach-Object { [pscustomobject]@{ name=$_.Name; driver_version=$_.DriverVersion; signed=$null } })
+} catch {}
+[pscustomobject]@{ display_drivers=$drivers } | ConvertTo-Json -Depth 4 -Compress
+`,
+  pc_storage_audit: PREFIX + `
+$volumes = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object -First 32 |
+  ForEach-Object {
+    $mapping = $false; $number = $null; $bus = $null; $media = $null; $health = $null
+    try {
+      if ($_.DeviceID -match '^[A-Za-z]:$') {
+        $parts = @(Get-Partition -DriveLetter $_.DeviceID.Substring(0,1) -ErrorAction Stop)
+        if ($parts.Count -eq 1) {
+          $disk = Get-Disk -Number $parts[0].DiskNumber -ErrorAction Stop
+          if ($null -ne $disk -and $null -ne $disk.BusType) {
+            $mapping = $true; $number = $disk.Number; $bus = $disk.BusType.ToString()
+            $health = $(if ($null -ne $disk.HealthStatus) { $disk.HealthStatus.ToString() } else { $null })
+          }
+        }
+      }
+    } catch {}
+    [pscustomobject]@{ drive=$_.DeviceID; total_bytes=$_.Size; free_bytes=$_.FreeSpace
+      filesystem=$_.FileSystem; disk_number=$number; bus_type=$bus; media_type=$media
+      disk_health=$health; mapping_verified=$mapping }
+  })
+[pscustomobject]@{ volumes=$volumes } | ConvertTo-Json -Depth 5 -Compress
+`,
+  pc_memory_audit: PREFIX + `
+$os = Get-CimInstance Win32_OperatingSystem
+$memory = $null
+try { $memory = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop } catch {}
+$processes = @(Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 20 |
+  ForEach-Object { [pscustomobject]@{ name=$_.ProcessName; pid=$_.Id; working_set_bytes=$_.WorkingSet64 } })
+[pscustomobject]@{
+  ram_total_bytes=([int64]$os.TotalVisibleMemorySize * 1024)
+  ram_free_bytes=([int64]$os.FreePhysicalMemory * 1024)
+  committed_bytes=$(if ($memory) { $memory.CommittedBytes } else { $null })
+  commit_limit_bytes=$(if ($memory) { $memory.CommitLimit } else { $null })
+  processes=$processes
+} | ConvertTo-Json -Depth 5 -Compress
+`,
+  pc_install_diagnostics: PREFIX + `
+$names = @('KTKQwenMCP','KTKQwenTunnel','KTKQwenUpdater')
+$services = @($names | ForEach-Object {
+  $service = Get-Service -Name $_ -ErrorAction SilentlyContinue
+  if ($service) { [pscustomobject]@{ name=$service.Name; status=$service.Status.ToString()
+    start_type=$service.StartType.ToString() } }
+})
+$taskStatus = 'unknown'
+try {
+  $task = Get-ScheduledTask -TaskName 'KTKQwenUserUpdater' -ErrorAction SilentlyContinue
+  if ($task) { $taskStatus = $task.State.ToString() } else { $taskStatus = 'not_found' }
+} catch {}
+$pending = $null
+try {
+  $pending = (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') -or
+    (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired')
+  $rename = Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
+  if ($null -ne $rename) { $pending = $true }
+} catch { $pending = $null }
+$mcpDirectory = $null
+$cudaDriverDll = $null
+try {
+  $mcpDirectory = Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'KTK\\QwenMCP') -PathType Container
+  $cudaDriverDll = Test-Path -LiteralPath (Join-Path $env:SystemRoot 'System32\\nvcuda.dll') -PathType Leaf
+} catch {}
+$strataProcesses = @(Get-Process -Name 'strata','strata-server' -ErrorAction SilentlyContinue |
+  Select-Object -First 8 | ForEach-Object { [pscustomobject]@{ name=$_.ProcessName; pid=$_.Id } })
+$updaterStatus = $null
+try {
+  $updaterPath = Join-Path $env:ProgramData 'KTK\\Updater\\status.json'
+  $item = Get-Item -LiteralPath $updaterPath -ErrorAction SilentlyContinue
+  if ($item -and $item.Length -gt 0 -and $item.Length -le 8192) {
+    $state = Get-Content -LiteralPath $updaterPath -Raw -ErrorAction Stop | ConvertFrom-Json
+    $updaterStatus = [pscustomobject]@{ status=$state.status; version=$state.version; code=$state.code }
+  }
+} catch {}
+[pscustomobject]@{ services=$services; user_task_status=$taskStatus; pending_reboot=$pending
+  mcp_directory_exists=$mcpDirectory; cuda_driver_dll_present=$cudaDriverDll
+  strata_processes=$strataProcesses; updater_status=$updaterStatus } |
+  ConvertTo-Json -Depth 5 -Compress
+`,
 });
 
 function validate(name, args) {
   if (!isRecord(args)) throw safeError("invalid_arguments");
   const keys = Object.keys(args);
-  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "update_status", "update_resume"].includes(name)) {
+  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "update_status", "update_resume"].includes(name)) {
     if (keys.length) throw safeError("invalid_arguments");
     return {};
   }
@@ -178,7 +293,7 @@ export async function runPowerShellQuery(name, args, { platform = process.platfo
   let result;
   try {
     result = await invoke(exe, ["-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", script], {
-      windowsHide: true, shell: false, timeout: name === "system_monitor" ? 12000 : 8000, maxBuffer: MAX_TEXT, encoding: "utf8", env,
+      windowsHide: true, shell: false, timeout: name === "system_monitor" ? 12000 : ["pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics"].includes(name) ? 18000 : 8000, maxBuffer: MAX_TEXT, encoding: "utf8", env,
     });
   } catch { throw safeError("powershell_unavailable"); }
   if (typeof result.stdout !== "string" || Buffer.byteLength(result.stdout, "utf8") > MAX_TEXT) throw safeError("powershell_unavailable");
@@ -221,6 +336,30 @@ const DEFINITIONS = Object.freeze({
     name: "installation_plan", description: "Generate a read-only SC117 IQ3_XXS + Strata setup plan from fresh hardware, storage and runtime observations. No downloads, installation or launch.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  pc_full_audit: {
+    name: "pc_full_audit", description: "Read Windows 11 version/build, CPU, physical/committed RAM, pagefile, reboot-pending markers and execution context. CPU instruction support is not tested.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  pc_gpu_audit: {
+    name: "pc_gpu_audit", description: "Read NVIDIA GPU/VRAM/driver/temperature telemetry and Windows display driver metadata. CUDA execution is NOT verified; unknowns remain unknown.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  pc_storage_audit: {
+    name: "pc_storage_audit", description: "Read fixed volumes, filesystems, free space and verified partition-to-disk bus mapping when available; never invent an NVMe mapping.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  pc_memory_audit: {
+    name: "pc_memory_audit", description: "Read RAM pressure, 20 bounded process working sets and GPU memory statistics. Never stops processes or clears caches.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  pc_install_diagnostics: {
+    name: "pc_install_diagnostics", description: "Read fixed KTK service/task/update status, installed directory, Strata process names, driver DLL and pending-reboot metadata. Per-user Strata, logs and CUDA execution stay unknown. Never repairs or installs.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  pc_readiness_report: {
+    name: "pc_readiness_report", description: "Combine fresh read-only Windows 11, NVIDIA, NVMe, RAM and KTK diagnostics into blockers, next actions and unknowns. No model download or execution.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   process_list: {
     name: "process_list", description: "List at most 50 Windows processes (optional exact process name). No command lines or secrets.",
@@ -286,7 +425,7 @@ async function readAllowedFile(filePath, roots) {
 export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery, readNvidia = queryNvidiaGpus, identityConfigured = false,
   updater = callLocalUpdater, updaterKey = null } = {}) {
   if (!Array.isArray(allowedFileRoots) || allowedFileRoots.some(root => typeof root !== "string" || !path.isAbsolute(root))) throw safeError("invalid_file_roots");
-  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", ...(updaterKey ? ["update_status", "update_apply", "update_resume"] : []), ...(allowedFileRoots.length ? ["file_read"] : [])];
+  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", ...(updaterKey ? ["update_status", "update_apply", "update_resume"] : []), ...(allowedFileRoots.length ? ["file_read"] : [])];
   const safeGpu = async () => {
     try { return await readNvidia(); } catch { return { status: "unavailable", reason: "gpu_inventory_failed", gpus: [] }; }
   };
@@ -294,6 +433,14 @@ export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQue
     if (name === "pc_preflight") return normalizePcPreflight(await runWindowsQuery(name, {}), await safeGpu());
     if (name === "storage_check") return normalizeStorageCheck(await runWindowsQuery(name, {}));
     if (name === "runtime_check") return normalizeRuntimeCheck(await runWindowsQuery(name, {}), await safeGpu());
+    throw safeError("unknown_tool");
+  };
+  const readPcAudit = async name => {
+    if (name === "pc_full_audit") return normalizePcFullAudit(await runWindowsQuery(name, {}));
+    if (name === "pc_gpu_audit") return normalizePcGpuAudit(await runWindowsQuery(name, {}), await safeGpu());
+    if (name === "pc_storage_audit") return normalizePcStorageAudit(await runWindowsQuery(name, {}));
+    if (name === "pc_memory_audit") return normalizePcMemoryAudit(await runWindowsQuery(name, {}), await safeGpu());
+    if (name === "pc_install_diagnostics") return normalizePcInstallDiagnostics(await runWindowsQuery(name, {}));
     throw safeError("unknown_tool");
   };
   return {
@@ -314,6 +461,13 @@ export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQue
       if (name === "file_read") return readAllowedFile(params.path, allowedFileRoots);
       if (name === "system_monitor") return collectWindowsMonitoring({ readSystem: () => runWindowsQuery(name, params), readGpu: readNvidia });
       if (["pc_preflight", "storage_check", "runtime_check"].includes(name)) return readModelCheck(name);
+      if (["pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics"].includes(name)) return readPcAudit(name);
+      if (name === "pc_readiness_report") {
+        const names = ["pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics"];
+        const outcomes = await Promise.allSettled(names.map(readPcAudit));
+        const [full, gpu, storage, memory, install] = outcomes.map(outcome => outcome.status === "fulfilled" ? outcome.value : null);
+        return buildPcReadinessReport({ full, gpu, storage, memory, install });
+      }
       if (name === "installation_plan") {
         // Fail individual observations closed, rather than presenting a partial
         // inventory as proof that a machine is suitable for installation.
