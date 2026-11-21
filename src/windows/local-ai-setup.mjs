@@ -168,7 +168,7 @@ export async function runLocalAiSetup({ approved = false, platform = process.pla
     await checkCancellation();
     if (tested?.status !== "inference_verified_and_stopped" || tested.inference_tested !== true) fail("localai_inference_not_verified");
     const result = { status: "passed", code: "localai_installed_tested", model: "SC117 IQ3_XXS",
-      strata_version: "0.2.17", inference_verified: true, endpoint: "127.0.0.1:18764",
+      strata_version: "0.2.17", inference_verified: true, runtime_state: "stopped", endpoint: "127.0.0.1:18764",
       note: "Inference acceptance ended with an owned graceful stop; model files remain on disk." };
     await reporter.result(result);
     await update("complete", 100);

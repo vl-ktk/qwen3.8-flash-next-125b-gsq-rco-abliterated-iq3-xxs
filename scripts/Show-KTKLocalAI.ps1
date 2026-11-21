@@ -129,11 +129,12 @@ $timer.Add_Tick({
         try {
             $freshResult = $null -ne $result -and [DateTimeOffset]::Parse([string]$result.at).UtcDateTime -ge $script:shownUtc
         } catch { }
-        $script:successful = $script:child.ExitCode -eq 0 -and $freshResult -and $result.status -eq 'passed'
+        $script:successful = $script:child.ExitCode -eq 0 -and $freshResult -and
+            $result.status -eq 'passed' -and $result.runtime_state -eq 'stopped' -and $result.inference_verified -eq $true
         $script:cancelled = $script:child.ExitCode -ne 0 -and $freshResult -and $result.status -eq 'cancelled' -and $result.code -eq 'localai_user_cancelled'
         if ($script:successful) {
             $progress.Value = 100
-            $state.Text = 'Готово! Strata, модель и тест генерации прошли проверку.'
+            $state.Text = 'Готово! Модель установлена, тест генерации пройден, модель остановлена.'
             $note.Text = 'Результат: ' + $resultFile
         } elseif ($script:cancelled) {
             $state.Text = 'Локальная модель отменена по запросу. MCP продолжает работать.'

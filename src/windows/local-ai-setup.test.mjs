@@ -97,6 +97,7 @@ test("one action runs A>B>C>D and records success with no credentials", async t 
   const result = await runLocalAiSetup(f.opts);
   assert.equal(result.status, "passed");
   assert.equal(result.inference_verified, true);
+  assert.equal(result.runtime_state, "stopped");
   assert.deepEqual(f.calls, ["lock", "strata", "model", "inference", "unlock"]);
   const json = await readFile(path.join(f.statusDir, "status.json"), "utf8");
   const final = JSON.parse(json);
@@ -105,6 +106,7 @@ test("one action runs A>B>C>D and records success with no credentials", async t 
   const report = JSON.parse(await readFile(path.join(f.statusDir, "result.json"), "utf8"));
   assert.equal(report.status, "passed");
   assert.equal(report.inference_verified, true);
+  assert.equal(report.runtime_state, "stopped");
   assert.doesNotMatch(json + JSON.stringify(report), /api_key|authorization|password|secret/i);
 });
 

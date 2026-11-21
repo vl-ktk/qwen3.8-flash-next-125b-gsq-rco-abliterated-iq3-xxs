@@ -11,6 +11,7 @@ const windowsCi = readFileSync(new URL("../../.github/workflows/windows-package.
 const localAiGui = readFileSync(new URL("../../scripts/Show-KTKLocalAI.ps1", import.meta.url), "utf8");
 const consent = readFileSync(new URL("../../scripts/Set-KTKLocalAIOptIn.ps1", import.meta.url), "utf8");
 const unified = readFileSync(new URL("../../scripts/Apply-KTKUnifiedRelease.ps1", import.meta.url), "utf8");
+const userUpdater = readFileSync(new URL("../../scripts/Run-KTKUserUpdate.mjs", import.meta.url), "utf8");
 
 test("integrated live installer defaults to MCP-only and requires explicit AI selection", () => {
   assert.match(setup, /Mode = '-Live'[\s\S]*?Run-KTKIntegratedAcceptance\.ps1/);
@@ -31,6 +32,7 @@ test("integrated live installer defaults to MCP-only and requires explicit AI se
   assert.match(setup, /Mode := '-Offline'/);
   assert.match(localAiGui, /cancel-request\.txt/);
   assert.match(localAiGui, /localai_user_cancelled/);
+  assert.match(localAiGui, /\$result\.runtime_state -eq 'stopped'/);
   assert.match(localAiGui, /if \(\$script:cancelled\) \{ exit 2 \}/);
 });
 
@@ -62,6 +64,18 @@ test("untrusted local AI consent never blocks an authorized MCP-only update", ()
   assert.match(consent, /\$finalAcl = Get-Acl -LiteralPath \$target/);
   assert.match(consent, /\$ace\.IdentityReference\.Value -notin @\('S-1-5-18','S-1-5-32-544'\)/);
   assert.match(windowsCi, /Injected untrusted local AI grant was not removed/);
+});
+
+test("unattended updates never call first-install inference, including with an obsolete user runner", () => {
+  assert.doesNotMatch(userUpdater, /await invoke\(command, \[script, "--install", "--installer-approved"\]/);
+  assert.match(userUpdater, /\["Install-KTKStrata\.mjs", \["--install", "--installer-approved"\]/);
+  assert.match(userUpdater, /\["Prepare-KTKSC117\.mjs", \["--prepare", "--installer-approved"\]/);
+  assert.match(unified, /\$safeRunner = Join-Path \$PackagePath 'Run-KTKUserUpdate\.mjs'/);
+  assert.match(unified, /Get-FileHash -LiteralPath \$expectedUserScript -Algorithm SHA256/);
+  assert.match(unified, /if \(-not \$runnerReady\) \{\s*\$doLocalAI = \$false/);
+  assert.match(unified, /KTK_LOCAL_AI_USER_RUNNER_NEEDS_SETUP_MCP_ONLY/);
+  assert.match(setup, /if InstallModePage\.Values\[1\] then begin[\s\S]*?Show-KTKLocalAI\.ps1/);
+  assert.match(localAiGui, /--install', '--installer-approved'/);
 });
 
 test("one-click approval cannot enable unrelated maintenance operations", () => {
