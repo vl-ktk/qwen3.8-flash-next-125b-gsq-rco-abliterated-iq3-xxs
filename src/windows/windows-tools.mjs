@@ -9,6 +9,7 @@ import { normalizePcPreflight, normalizeStorageCheck, normalizeRuntimeCheck, bui
 import { normalizePcFullAudit, normalizePcGpuAudit, normalizePcStorageAudit, normalizePcMemoryAudit, normalizePcInstallDiagnostics, buildPcReadinessReport, buildPcPerformanceRecommendations } from "./pc-diagnostics.mjs";
 import { callLocalUpdater, validateUpdateOffer } from "./remote-update.mjs";
 import { validateMaintenancePreview, validateMaintenanceApply } from "./pc-maintenance.mjs";
+import { validateLocalAiPrepare, validateLocalAiConfirm } from "./local-ai-remote.mjs";
 
 const execFileAsync = promisify(execFile);
 const MAX_READ = 32 * 1024;
@@ -261,7 +262,7 @@ try {
 function validate(name, args) {
   if (!isRecord(args)) throw safeError("invalid_arguments");
   const keys = Object.keys(args);
-  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_storage_mapping", "pc_memory_audit", "pc_install_diagnostics", "pc_user_task_status", "pc_readiness_report", "pc_performance_advice", "pc_maintenance_status", "update_status", "update_resume"].includes(name)) {
+  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_storage_mapping", "pc_memory_audit", "pc_install_diagnostics", "pc_user_task_status", "pc_readiness_report", "pc_performance_advice", "pc_maintenance_status", "local_ai_install_status", "local_ai_health", "model_status", "update_status", "update_resume"].includes(name)) {
     if (keys.length) throw safeError("invalid_arguments");
     return {};
   }
@@ -282,6 +283,8 @@ function validate(name, args) {
   if (name === "update_apply") return validateUpdateOffer(args);
   if (name === "pc_maintenance_preview") return validateMaintenancePreview(args);
   if (name === "pc_maintenance_apply") return validateMaintenanceApply(args);
+  if (name === "local_ai_install_prepare") return validateLocalAiPrepare(args);
+  if (["local_ai_install_resume", "local_ai_repair"].includes(name)) return validateLocalAiConfirm(args);
   throw safeError("unknown_tool");
 }
 
@@ -393,6 +396,36 @@ const DEFINITIONS = Object.freeze({
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
+  local_ai_install_status: {
+    name: "local_ai_install_status", description: "Read fixed user-task and approved SC117 preparation status. Unknown/unverified data is never called installed. Never downloads or loads the model.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  local_ai_health: {
+    name: "local_ai_health", description: "Read-only Strata/SC117 installer health: task trust and preparation status. No CUDA inference or model startup.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  model_status: {
+    name: "model_status", description: "Read-only local model lifecycle state; until the button-only lifecycle controller (stage 4) is installed, loading state remains unknown, not invented.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  local_ai_install_prepare: {
+    name: "local_ai_install_prepare", description: "Read-only owner-confirmable plan for pinned Strata v0.2.17 and SC117 IQ3_XXS preparation or repair in the original Windows user's task. No GPU inference, model load or PC dialogs.",
+    inputSchema: { type: "object", properties: { operation: { type: "string", enum: ["prepare", "repair"] } }, required: ["operation"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false },
+  },
+  local_ai_install_resume: {
+    name: "local_ai_install_resume", description: "One-shot owner-chat confirmed scheduling of pinned Strata/SC117 download+pack into the verified interactive KTK user task. Never runs inference or loads the model; 77 GB may download.",
+    inputSchema: { type: "object", properties: { plan_id: { type: "string", pattern: "^[a-f0-9]{32}$" }, confirmation: { type: "string", pattern: "^CONFIRM KTK LOCAL AI [a-f0-9]{32}$" } }, required: ["plan_id", "confirmation"], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
+  local_ai_repair: {
+    name: "local_ai_repair", description: "Separate one-shot owner-chat confirmed, fixed per-user KTK Strata repair and SC117 partial-resume job. No arbitrary path/process and no model activation.",
+    inputSchema: { type: "object", properties: { plan_id: { type: "string", pattern: "^[a-f0-9]{32}$" }, confirmation: { type: "string", pattern: "^CONFIRM KTK LOCAL AI [a-f0-9]{32}$" } }, required: ["plan_id", "confirmation"], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
   process_list: {
     name: "process_list", description: "List at most 50 Windows processes (optional exact process name). No command lines or secrets.",
     inputSchema: { type: "object", properties: {
@@ -457,7 +490,7 @@ async function readAllowedFile(filePath, roots) {
 export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery, readNvidia = queryNvidiaGpus, identityConfigured = false,
   updater = callLocalUpdater, updaterKey = null } = {}) {
   if (!Array.isArray(allowedFileRoots) || allowedFileRoots.some(root => typeof root !== "string" || !path.isAbsolute(root))) throw safeError("invalid_file_roots");
-  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "pc_performance_advice", ...(updaterKey ? ["pc_maintenance_preview", "pc_maintenance_apply", "pc_maintenance_status", "update_status", "update_apply", "update_resume"] : []), ...(allowedFileRoots.length ? ["file_read"] : [])];
+  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "pc_performance_advice", ...(updaterKey ? ["pc_maintenance_preview", "pc_maintenance_apply", "pc_maintenance_status", "local_ai_install_status", "local_ai_health", "model_status", "local_ai_install_prepare", "local_ai_install_resume", "local_ai_repair", "update_status", "update_apply", "update_resume"] : []), ...(allowedFileRoots.length ? ["file_read"] : [])];
   const safeGpu = async () => {
     try { return await readNvidia(); } catch { return { status: "unavailable", reason: "gpu_inventory_failed", gpus: [] }; }
   };
@@ -505,6 +538,12 @@ export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQue
         if (!updaterKey) throw safeError("maintenance_not_configured");
         const action = name === "pc_maintenance_preview" ? "maintenance_preview" : name === "pc_maintenance_apply" ? "maintenance_apply" : "maintenance_status";
         return updater(action, params, { keyText: updaterKey });
+      }
+      if (["local_ai_install_status", "local_ai_health", "model_status", "local_ai_install_prepare", "local_ai_install_resume", "local_ai_repair"].includes(name)) {
+        if (!updaterKey) throw safeError("local_ai_not_configured");
+        const route = name === "local_ai_install_prepare" ? "local_ai_preview" : name === "local_ai_install_resume" ? "local_ai_install" :
+          name === "local_ai_repair" ? "local_ai_repair" : "local_ai_status";
+        return updater(route, params, { keyText: updaterKey });
       }
       if (name === "admin_status") return getAdminStatus({
         paired: identityConfigured,

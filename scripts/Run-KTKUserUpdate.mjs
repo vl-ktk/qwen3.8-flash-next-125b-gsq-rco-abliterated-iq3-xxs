@@ -98,7 +98,12 @@ export async function runUserUpdate({ platform = process.platform, localAppData 
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) && process.platform === "win32") {
-  runUserUpdate().then(result => process.stdout.write(JSON.stringify(result) + "\n"), error => {
+  (async () => {
+    const { runLocalAiUserJob } = await import("./Run-KTKLocalAIJob.mjs");
+    const local = await runLocalAiUserJob();
+    if (!["no_approved_local_ai_job", "already_prepared"].includes(local.status)) return local;
+    return runUserUpdate();
+  })().then(result => process.stdout.write(JSON.stringify(result) + "\n"), error => {
     process.stderr.write(JSON.stringify({ status: "failed", code: error?.code || "user_update_failed" }) + "\n");
     process.exitCode = 1;
   });

@@ -221,6 +221,26 @@ test("privileged PC maintenance requires its own OAuth scope, never merely read 
   assert.equal((await f.mcp(maintenance.access_token, "tools/call", { name: "pc_maintenance_apply", arguments: { plan_id: "a".repeat(32), command: "whoami" } })).status, 400);
 });
 
+test("Strata/SC117 user installer requires distinct OAuth scope and exact owner-chat plan", async t => {
+  const f = await fixture(t);
+  const read = await f.login();
+  const maint = await f.login({ scope: "qwen:read qwen:maintenance qwen:update" });
+  const local = await f.login({ scope: "qwen:read qwen:localai:install" });
+  const plan_id = "a".repeat(32);
+  const confirmed = { name: "local_ai_install_resume", arguments: { plan_id,
+    confirmation: `CONFIRM KTK LOCAL AI ${plan_id}` } };
+  assert.equal((await f.mcp(read.access_token, "tools/call", confirmed)).status, 403);
+  assert.equal((await f.mcp(maint.access_token, "tools/call", confirmed)).status, 403);
+  for (const name of ["local_ai_install_resume", "local_ai_repair"]) {
+    assert.equal((await f.mcp(local.access_token, "tools/call", { name, arguments: { ...confirmed.arguments, command: "shutdown.exe" } })).status, 400);
+    assert.equal((await f.mcp(local.access_token, "tools/call", { name, arguments: { plan_id, confirmation: "yes" } })).status, 400);
+    assert.equal((await f.mcp(local.access_token, "tools/call", { name, arguments: confirmed.arguments })).status, 200);
+  }
+  assert.equal((await f.mcp(read.access_token, "tools/call", { name: "local_ai_install_prepare", arguments: { operation: "prepare", url: "https://evil.example" } })).status, 400);
+  assert.equal((await f.mcp(read.access_token, "tools/call", { name: "local_ai_install_prepare", arguments: { operation: "prepare" } })).status, 200);
+  assert.equal((await f.mcp(read.access_token, "tools/call", { name: "model_status", arguments: {} })).status, 200);
+});
+
 test("origin shared key is required before device attestation and MCP forwarding", async t => {
   const f = await fixture(t, { gatewayConfigured: false });
   const login = await f.login();
