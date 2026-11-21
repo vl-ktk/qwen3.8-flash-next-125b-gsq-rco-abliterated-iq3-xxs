@@ -68,6 +68,17 @@ test("explicit cancellation stops before Strata/model and reports safely retaine
   assert.equal(result.retained, "verified_and_partial_artifacts");
 });
 
+test("pausing one attempt and resuming another retains the explicit one-time acceptance gate", async t => {
+  let pause = true;
+  const f = await fixture(t, { cancelRequested: async () => pause && f.calls.includes("model") });
+  await assert.rejects(runLocalAiSetup(f.opts), /localai_user_cancelled/);
+  assert.equal(f.calls.includes("inference"), false);
+  pause = false;
+  const result = await runLocalAiSetup(f.opts);
+  assert.equal(result.runtime_state, "stopped");
+  assert.equal(f.calls.filter(step => step === "inference").length, 1);
+});
+
 test("cancel timer aborts stalled model download and never starts inference", async t => {
   const f = await fixture(t, {
     cancelRequested: async () => f.calls.includes("model"),
@@ -107,6 +118,15 @@ test("one action runs A>B>C>D and records success with no credentials", async t 
   assert.equal(report.status, "passed");
   assert.equal(report.inference_verified, true);
   assert.equal(report.runtime_state, "stopped");
+  // Preflight data must describe real resources, not invented GPU/SSD facts.
+  const observed = [];
+  const f2 = await fixture(t, { reportFactory: async () => ({ status: value => observed.push(value), result: async () => {} }) });
+  await runLocalAiSetup(f2.opts);
+  const preflight = observed.find(value => value.phase === "preflight_complete");
+  assert.equal(preflight.detail.ram_gib, 64);
+  assert.equal(preflight.detail.vram_gib, 23);
+  assert.deepEqual(preflight.detail.drives, [{ drive: "D:", free_gib: 130 }]);
+  assert.ok(preflight.detail.download_bytes > 76_000_000_000);
   assert.doesNotMatch(json + JSON.stringify(report), /api_key|authorization|password|secret/i);
 });
 

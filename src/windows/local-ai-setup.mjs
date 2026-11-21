@@ -4,7 +4,7 @@ import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createWindowsToolRegistry } from "./windows-tools.mjs";
 import { strataInstallRoot, installStrata } from "./strata-installer.mjs";
-import { prepareSc117Model } from "./sc117-model.mjs";
+import { prepareSc117Model, sc117Plan } from "./sc117-model.mjs";
 import { testSc117Inference } from "./sc117-inference.mjs";
 
 const GIB = 2 ** 30;
@@ -117,7 +117,11 @@ export async function runLocalAiSetup({ approved = false, platform = process.pla
     await update("preflight", 1);
     const { pc, storage } = await inventory();
     const hardware = assertLocalAiHardware(pc, storage);
-    await update("preflight_complete", 5, hardware);
+    const matchingGpu = pc.gpu.gpus.find(gpu => Number.isSafeInteger(gpu.vram_total_bytes) && gpu.vram_total_bytes >= 20 * GIB);
+    const drives = storage.volumes.filter(v => ["C:", "D:"].includes(v.drive) && Number.isSafeInteger(v.free_bytes))
+      .map(v => ({ drive: v.drive, free_gib: Math.floor(v.free_bytes / GIB) }));
+    await update("preflight_complete", 5, { ...hardware, vram_gib: Math.floor(matchingGpu.vram_total_bytes / GIB),
+      drives, download_bytes: sc117Plan().model_and_mtp_bytes });
 
     stage = "strata";
     const strata = await installRuntime({ ownerApproved: true, localAppData,
