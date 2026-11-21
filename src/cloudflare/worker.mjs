@@ -185,7 +185,7 @@ export class QwenOAuthState extends DurableObject {
         if (message.params.name === "pc_maintenance_preview") {
           const args = message.params.arguments;
           if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).join() !== "action" ||
-              !["start_ktk_tunnel", "rollback_ktk_tunnel", "enable_ktk_tunnel_autostart", "rollback_ktk_tunnel_autostart"].includes(args.action))
+              !["start_ktk_tunnel", "rollback_ktk_tunnel", "enable_ktk_tunnel_autostart", "rollback_ktk_tunnel_autostart", "enable_ktk_mcp_autostart", "rollback_ktk_mcp_autostart", "enable_ktk_updater_autostart", "rollback_ktk_updater_autostart", "quarantine_ktk_staging", "restore_ktk_staging"].includes(args.action))
             return json(400, { error: "invalid_maintenance_request" });
         }
         if (message.params.name === "update_apply") {

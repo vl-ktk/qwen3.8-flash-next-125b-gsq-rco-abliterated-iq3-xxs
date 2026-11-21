@@ -2,12 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { createOriginVerifier } from "./origin-auth.mjs";
 import { validateUpdateOffer, signUpdateRequest, createUpdaterServer, callLocalUpdater, downloadVerifiedRelease, applyVerifiedRelease, classifyUpdateFailure, runFixedUserTask, createMaintenanceEnvironment } from "./remote-update.mjs";
+import { createKtkStageAdapter } from "./pc-updater-staging.mjs";
 
 const spawn = promisify(execFile);
 
@@ -146,6 +147,29 @@ test("privileged updater runs only its bundled fixed PS script with fixed argume
   assert.equal(calls[0].args.at(-1), offer.version);
   assert.equal(calls[0].options.shell, false);
   assert.deepEqual(calls[0].options.env, createMaintenanceEnvironment());
+});
+
+test("live SYSTEM updater marks its private staging with an authenticated ownership receipt and cleans only this attempt", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "ktk-updater-staging-marker-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const keyText = randomBytes(32).toString("base64url");
+  let marked = false;
+  const status = await applyVerifiedRelease(offer, { updaterRoot: dir, dataRoot: dir, stageOwnerKey: keyText,
+    download: async (_offer, dest) => {
+      const staged = path.dirname(dest);
+      assert.match(path.basename(staged), /^update-[A-Za-z0-9]{6}$/);
+      const owner = JSON.parse(await readFile(path.join(staged, "ktk-stage-owner.json"), "utf8"));
+      assert.equal(owner.owner, "KTKQwenUpdater");
+      const inspector = createKtkStageAdapter({ dataRoot: dir, keyText });
+      assert.equal((await inspector.inspect(path.basename(staged))).signature, owner.signature);
+      marked = true;
+      return bytes.length;
+    },
+    invoke: async () => ({ stdout: "KTK_MCP_UPDATE_ONLY\n" }),
+  });
+  assert.equal(status.status, "updated");
+  assert.equal(marked, true);
+  assert.deepEqual((await readdir(dir)).filter(name => name.startsWith("update-")), []);
 });
 
 test("SYSTEM maintenance environment restores trusted Windows native command lookup", async () => {

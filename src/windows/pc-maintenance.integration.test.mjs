@@ -85,7 +85,7 @@ test("concurrent KTK release update blocks privileged maintenance before any PC 
   });
   const keyText = randomBytes(32).toString("base64url");
   const server = createUpdaterServer({ keyText, port: 0, dataRoot, updaterRoot: dataRoot,
-    initialStatus: { status: "running", version: "0.18.18" }, pcMaintenance: maintenance });
+    initialStatus: { status: "running", version: "0.18.19" }, pcMaintenance: maintenance });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const port = server.address().port;
