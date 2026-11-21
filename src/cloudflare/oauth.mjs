@@ -2,7 +2,7 @@ import { OAuthAuthorizationServer, AuthorizationError, openTransaction } from ".
 
 export const ISSUER = "https://qwen125b-mcp.vl-ktk.workers.dev";
 export const RESOURCE = ISSUER + "/mcp";
-export const SCOPES = Object.freeze(["qwen:read", "qwen:files:read", "qwen:update", "qwen:maintenance"]);
+export const SCOPES = Object.freeze(["qwen:read", "qwen:files:read", "qwen:update", "qwen:maintenance", "qwen:localai:install"]);
 const COOKIE_BASE = "__Host-qwen125b-consent";
 const CONSENT_PROOF_TTL = 600;
 

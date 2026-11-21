@@ -16,6 +16,7 @@ const SOURCE_FILES = Object.freeze([
   "src/windows/sc117-model.mjs", "src/windows/sc117-model.lock.json",
   "src/windows/sc117-inference.mjs",
   "src/windows/local-ai-setup.mjs",
+  "src/windows/local-ai-remote.mjs",
   "src/windows/remote-update.mjs",
   "src/windows/monitoring.mjs", "src/windows/origin-auth.mjs",
   "src/windows/windows-tools.mjs",
@@ -113,6 +114,7 @@ export async function buildWindowsPackage({ sourceRoot, vendorDir, outFile, sour
     await include(path.join(sourceRoot, "scripts/Set-KTKLocalAIOptIn.ps1"), "Set-KTKLocalAIOptIn.ps1");
     await include(path.join(sourceRoot, "scripts/Install-KTKUserUpdater.ps1"), "Install-KTKUserUpdater.ps1");
     await include(path.join(sourceRoot, "scripts/Run-KTKUserUpdate.mjs"), "Run-KTKUserUpdate.mjs");
+    await include(path.join(sourceRoot, "scripts/Run-KTKLocalAIJob.mjs"), "Run-KTKLocalAIJob.mjs");
     await include(path.join(sourceRoot, "scripts/Apply-KTKUnifiedRelease.ps1"), "Apply-KTKUnifiedRelease.ps1");
     await include(path.join(sourceRoot, "scripts/Run-KTKRemoteUpdate.ps1"), "Run-KTKRemoteUpdate.ps1");
     await include(path.join(sourceRoot, "scripts/Run-KTKUpdater.mjs"), "runtime/Run-KTKUpdater.mjs");

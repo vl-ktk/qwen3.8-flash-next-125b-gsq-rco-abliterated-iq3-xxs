@@ -7,7 +7,11 @@ Set-StrictMode -Version Latest
 if ([bool]$Live -eq [bool]$CheckOnly) { throw 'choose_live_or_check_only' }
 $source = Split-Path -Parent $MyInvocation.MyCommand.Path
 & (Join-Path $source 'Verify-KTKPackage.ps1') | Out-Null
-foreach ($file in @('bin\node.exe','Run-KTKUserUpdate.mjs')) {
+$runtimeNeeded = @('local-ai-setup.mjs','strata-installer.mjs','strata-runtime.lock.json',
+    'sc117-model.mjs','sc117-model.lock.json','sc117-inference.mjs','windows-tools.mjs',
+    'monitoring.mjs','administration.mjs','model-preflight.mjs','pc-diagnostics.mjs',
+    'remote-update.mjs','local-ai-remote.mjs','pc-maintenance.mjs','pc-updater-staging.mjs','origin-auth.mjs')
+foreach ($file in (@('bin\node.exe','Run-KTKUserUpdate.mjs','Run-KTKLocalAIJob.mjs') + @($runtimeNeeded | ForEach-Object { 'runtime\' + $_ }))) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $file) -PathType Leaf)) { throw 'user_updater_payload_incomplete' }
 }
 if (-not [Environment]::Is64BitOperatingSystem -or [Environment]::OSVersion.Version.Build -lt 19045) { throw 'user_updater_unsupported_windows' }
@@ -19,6 +23,7 @@ $root = Join-Path $env:LOCALAPPDATA 'KTK\UserUpdater'
 $marker = Join-Path $root 'owner.json'
 $node = Join-Path $root 'bin\node.exe'
 $entry = Join-Path $root 'Run-KTKUserUpdate.mjs'
+$localAiEntry = Join-Path $root 'Run-KTKLocalAIJob.mjs'
 $taskName = 'KTKQwenUserUpdater'
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing) {
@@ -42,6 +47,19 @@ if (Test-Path -LiteralPath $root) {
 }
 Copy-Item -LiteralPath (Join-Path $source 'bin\node.exe') -Destination $node -Force -ErrorAction Stop
 Copy-Item -LiteralPath (Join-Path $source 'Run-KTKUserUpdate.mjs') -Destination $entry -Force -ErrorAction Stop
+Copy-Item -LiteralPath (Join-Path $source 'Run-KTKLocalAIJob.mjs') -Destination $localAiEntry -Force -ErrorAction Stop
+$localRuntime = Join-Path $root 'runtime'
+if (Test-Path -LiteralPath $localRuntime) {
+    if (-not (Test-Path -LiteralPath $localRuntime -PathType Container) -or
+        ([IO.File]::GetAttributes($localRuntime) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'user_updater_runtime_untrusted' }
+} else { New-Item -ItemType Directory -Path $localRuntime -ErrorAction Stop | Out-Null }
+foreach ($file in $runtimeNeeded) {
+    $destination = Join-Path $localRuntime $file
+    if (Test-Path -LiteralPath $destination) {
+        if (([IO.File]::GetAttributes($destination) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'user_updater_runtime_link_denied' }
+    }
+    Copy-Item -LiteralPath (Join-Path (Join-Path $source 'runtime') $file) -Destination $destination -Force -ErrorAction Stop
+}
 if (-not $existing) {
     $service = New-Object -ComObject Schedule.Service
     $service.Connect()

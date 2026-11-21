@@ -6,7 +6,7 @@ Set-StrictMode -Version Latest
 if ([bool]$Live -eq [bool]$CheckOnly) { throw 'choose_live_or_check_only' }
 $source = Split-Path -Parent $MyInvocation.MyCommand.Path
 & (Join-Path $source 'Verify-KTKPackage.ps1') | Out-Null
-$required = @('bin\node.exe','bin\WinSW.exe','runtime\remote-update.mjs','runtime\pc-maintenance.mjs','runtime\pc-updater-staging.mjs','runtime\origin-auth.mjs',
+$required = @('bin\node.exe','bin\WinSW.exe','runtime\remote-update.mjs','runtime\pc-maintenance.mjs','runtime\pc-updater-staging.mjs','runtime\local-ai-remote.mjs','runtime\origin-auth.mjs',
   'runtime\Run-KTKUpdater.mjs','Run-KTKRemoteUpdate.ps1','services\KTKQwenUpdater.xml')
 foreach ($file in $required) { if (-not (Test-Path -LiteralPath (Join-Path $source $file) -PathType Leaf)) { throw 'updater_payload_incomplete' } }
 if (-not [Environment]::Is64BitOperatingSystem -or [Environment]::OSVersion.Version.Build -lt 19045) { throw 'updater_windows_10_22h2_required' }
@@ -18,6 +18,32 @@ $root = Join-Path $env:ProgramFiles 'KTK\Updater'
 $data = Join-Path $env:ProgramData 'KTK\Updater'
 $gateway = Join-Path $env:ProgramData 'KTK\QwenMCP\secrets\gateway.key'
 if (-not (Test-Path -LiteralPath $gateway -PathType Leaf)) { throw 'updater_requires_enrolled_mcp' }
+function Set-KTKPublicJobAcl {
+    $public = Join-Path $data 'public'
+    if (Test-Path -LiteralPath $public) {
+        if (-not (Test-Path -LiteralPath $public -PathType Container) -or
+            ([IO.File]::GetAttributes($public) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'updater_public_directory_untrusted' }
+    } else { New-Item -ItemType Directory -Path $public -ErrorAction Stop | Out-Null }
+    & icacls.exe $public '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'updater_public_acl_failed' }
+    # /grant:r replaces only listed trustees. On Windows 11 the newly created
+    # directory can retain unrelated explicit grants, so remove those first.
+    $permitted = @('S-1-5-18','S-1-5-32-544','S-1-5-32-545')
+    $acl = Get-Acl -LiteralPath $public
+    if (-not $acl.AreAccessRulesProtected) { throw 'updater_public_acl_untrusted' }
+    foreach ($ace in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+        if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $ace.IdentityReference.Value -notin $permitted) {
+            & icacls.exe $public '/remove:g' ('*' + $ace.IdentityReference.Value) | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'updater_public_acl_failed' }
+        }
+    }
+    $acl = Get-Acl -LiteralPath $public
+    foreach ($ace in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+        if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $ace.IdentityReference.Value -notin $permitted) { throw 'updater_public_acl_untrusted' }
+    }
+}
 function Assert-OwnedUpdaterDirectory([string]$Folder) {
     if (-not (Test-Path -LiteralPath $Folder -PathType Container) -or
         ([IO.File]::GetAttributes($Folder) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'updater_directory_untrusted' }
@@ -57,7 +83,7 @@ if ($existing) {
         # the currently working SYSTEM updater offline.
         New-Item -ItemType Directory -Path (Join-Path $stage 'runtime') -Force -ErrorAction Stop | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $stage 'bin') -Force -ErrorAction Stop | Out-Null
-        foreach ($file in @('remote-update.mjs','pc-maintenance.mjs','pc-updater-staging.mjs','origin-auth.mjs','Run-KTKUpdater.mjs')) {
+        foreach ($file in @('remote-update.mjs','pc-maintenance.mjs','pc-updater-staging.mjs','local-ai-remote.mjs','origin-auth.mjs','Run-KTKUpdater.mjs')) {
             Copy-Item -LiteralPath (Join-Path $source ('runtime\' + $file)) -Destination (Join-Path $stage ('runtime\' + $file)) -ErrorAction Stop
         }
         Copy-Item -LiteralPath (Join-Path $source 'bin\node.exe') -Destination (Join-Path $stage 'bin\node.exe') -ErrorAction Stop
@@ -75,6 +101,7 @@ if ($existing) {
         [IO.Directory]::Move($stage, $root)
         Start-Service -Name 'KTKQwenUpdater' -ErrorAction Stop
         Assert-UpdaterReady
+        Set-KTKPublicJobAcl
         Write-Output 'KTK updater upgraded and healthy. Previous code kept for rollback.'
     } catch {
         $failure = $_
@@ -102,7 +129,7 @@ $activated = $false
 try {
     New-Item -ItemType Directory -Path (Join-Path $stage 'runtime') -Force -ErrorAction Stop | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $stage 'bin') -Force -ErrorAction Stop | Out-Null
-    foreach ($file in @('remote-update.mjs','pc-maintenance.mjs','pc-updater-staging.mjs','origin-auth.mjs','Run-KTKUpdater.mjs')) {
+    foreach ($file in @('remote-update.mjs','pc-maintenance.mjs','pc-updater-staging.mjs','local-ai-remote.mjs','origin-auth.mjs','Run-KTKUpdater.mjs')) {
         Copy-Item -LiteralPath (Join-Path $source ('runtime\' + $file)) -Destination (Join-Path $stage ('runtime\' + $file)) -ErrorAction Stop
     }
     Copy-Item -LiteralPath (Join-Path $source 'bin\node.exe') -Destination (Join-Path $stage 'bin\node.exe') -ErrorAction Stop
@@ -115,6 +142,7 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $data 'logs') -ErrorAction Stop | Out-Null
     & icacls.exe $data '/T' '/C' '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'updater_data_acl_failed' }
+    Set-KTKPublicJobAcl
     [IO.Directory]::Move($stage, $root)
     & (Join-Path $root 'KTKQwenUpdater.exe') install
     if ($LASTEXITCODE -ne 0) { throw ('updater_service_install_failed_exit_{0}' -f $LASTEXITCODE) }

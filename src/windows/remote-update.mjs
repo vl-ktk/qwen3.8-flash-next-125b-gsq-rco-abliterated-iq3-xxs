@@ -8,6 +8,8 @@ import { createOriginVerifier, decodeGatewayKey } from "./origin-auth.mjs";
 import { createPcMaintenanceController, createWindowsTunnelAdapter,
   validateMaintenancePreview, validateMaintenanceApply } from "./pc-maintenance.mjs";
 import { markKtkUpdateStage, createKtkStageAdapter } from "./pc-updater-staging.mjs";
+import { createLocalAiRemoteController, inspectKtkUserTask, queueKtkLocalAiJob,
+  validateLocalAiPrepare, validateLocalAiConfirm } from "./local-ai-remote.mjs";
 
 const exec = promisify(execFile);
 const VERSION = /^0\.18\.[1-9]\d{0,3}$/;
@@ -66,19 +68,24 @@ export function signUpdateRequest(keyText, method, route, body = "", now = Date.
 }
 
 export async function callLocalUpdater(action, offer, { keyText, fetcher = fetch, port = 18765 } = {}) {
-  if (!["update", "status", "resume", "maintenance_preview", "maintenance_apply", "maintenance_status"].includes(action)) fail("unknown_update_action");
+  if (!["update", "status", "resume", "maintenance_preview", "maintenance_apply", "maintenance_status",
+    "local_ai_status", "local_ai_preview", "local_ai_install", "local_ai_repair"].includes(action)) fail("unknown_update_action");
   if (typeof keyText !== "string") fail("updater_not_configured");
   const route = ({ update: "/v1/update", status: "/v1/status", resume: "/v1/resume",
     maintenance_preview: "/v1/maintenance/preview", maintenance_apply: "/v1/maintenance/apply",
-    maintenance_status: "/v1/maintenance/status" })[action];
+    maintenance_status: "/v1/maintenance/status", local_ai_status: "/v1/local-ai/status",
+    local_ai_preview: "/v1/local-ai/preview", local_ai_install: "/v1/local-ai/install", local_ai_repair: "/v1/local-ai/repair" })[action];
   const body = action === "update" ? JSON.stringify(validateUpdateOffer(offer)) :
     action === "maintenance_preview" ? JSON.stringify(validateMaintenancePreview(offer)) :
-      action === "maintenance_apply" ? JSON.stringify(validateMaintenanceApply(offer)) : "";
-  const method = ["status", "maintenance_status"].includes(action) ? "GET" : "POST";
+      action === "maintenance_apply" ? JSON.stringify(validateMaintenanceApply(offer)) :
+        action === "local_ai_preview" ? JSON.stringify(validateLocalAiPrepare(offer)) :
+          ["local_ai_install", "local_ai_repair"].includes(action) ? JSON.stringify(validateLocalAiConfirm(offer)) : "";
+  const method = ["status", "maintenance_status", "local_ai_status"].includes(action) ? "GET" : "POST";
   const response = await fetcher(`http://127.0.0.1:${port}${route}`, {
     method, redirect: "error", body: body || undefined,
     headers: signUpdateRequest(keyText, method, route, body),
-    signal: AbortSignal.timeout(action === "maintenance_apply" ? 45000 : action === "maintenance_preview" ? 22000 : 4500),
+    signal: AbortSignal.timeout(["maintenance_apply", "local_ai_install", "local_ai_repair"].includes(action) ? 45000 :
+      ["maintenance_preview", "local_ai_preview"].includes(action) ? 22000 : 4500),
   }).catch(() => fail("updater_unavailable"));
   if (!response.ok) fail("updater_unavailable");
   return response.json().catch(() => fail("updater_unavailable"));
@@ -177,7 +184,7 @@ export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, stage
 export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1", apply = applyVerifiedRelease,
   updaterRoot, dataRoot, statusFile = path.join(dataRoot, "status.json"), initialStatus = { status: "idle" },
   checkUser = async () => null, resumeUser = async () => ({ status: "waiting_for_login" }),
-  pcMaintenance = null } = {}) {
+  pcMaintenance = null, pcLocalAi = null } = {}) {
   if (host !== "127.0.0.1" || !Number.isInteger(port) || port < 0 || port > 65535) fail("invalid_updater_bind");
   const verify = createOriginVerifier(keyText);
   let state = initialStatus;
@@ -186,8 +193,9 @@ export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1",
     const reply = (code, data) => { res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(data)); };
     try {
       if (req.headers.host !== `127.0.0.1:${server.address().port}` || req.headers.origin) return reply(403, { error: "forbidden" });
-      if (!["/v1/update", "/v1/status", "/v1/resume", "/v1/maintenance/preview", "/v1/maintenance/apply", "/v1/maintenance/status"].includes(req.url)) return reply(404, { error: "not_found" });
-      const method = ["/v1/status", "/v1/maintenance/status"].includes(req.url) ? "GET" : "POST";
+      if (!["/v1/update", "/v1/status", "/v1/resume", "/v1/maintenance/preview", "/v1/maintenance/apply", "/v1/maintenance/status",
+        "/v1/local-ai/status", "/v1/local-ai/preview", "/v1/local-ai/install", "/v1/local-ai/repair"].includes(req.url)) return reply(404, { error: "not_found" });
+      const method = ["/v1/status", "/v1/maintenance/status", "/v1/local-ai/status"].includes(req.url) ? "GET" : "POST";
       if (req.method !== method) return reply(405, { error: "method_not_allowed" });
       let size = 0;
       const parts = [];
@@ -201,11 +209,25 @@ export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1",
             if (raw.length) return reply(400, { error: "invalid_arguments" });
             return reply(200, await pcMaintenance.status());
           }
-          if (state.status === "running") return reply(409, { error: "maintenance_busy" });
+          if (state.status === "running" || pcLocalAi?.isBusy?.()) return reply(409, { error: "maintenance_busy" });
           const payload = JSON.parse(raw.toString("utf8"));
           if (req.url === "/v1/maintenance/preview") return reply(200, await pcMaintenance.preview(validateMaintenancePreview(payload)));
           return reply(200, await pcMaintenance.apply(validateMaintenanceApply(payload)));
         } catch (error) { return reply(409, { error: typeof error?.code === "string" && /^maintenance_[a-z_]+$|^ktk_service_not_trusted$/.test(error.code) ? error.code : "maintenance_unavailable" }); }
+      }
+      if (req.url.startsWith("/v1/local-ai/")) {
+        if (!pcLocalAi) return reply(503, { error: "local_ai_not_configured" });
+        try {
+          if (req.url === "/v1/local-ai/status") {
+            if (raw.length) return reply(400, { error: "invalid_arguments" });
+            return reply(200, await pcLocalAi.status());
+          }
+          if (state.status === "running" || pcMaintenance?.isBusy?.()) return reply(409, { error: "local_ai_busy" });
+          const payload = JSON.parse(raw.toString("utf8"));
+          if (req.url === "/v1/local-ai/preview") return reply(200, await pcLocalAi.preview(validateLocalAiPrepare(payload)));
+          if (req.url === "/v1/local-ai/install") return reply(200, await pcLocalAi.install(validateLocalAiConfirm(payload)));
+          return reply(200, await pcLocalAi.repair(validateLocalAiConfirm(payload)));
+        } catch (error) { return reply(409, { error: typeof error?.code === "string" && /^local_ai_[a-z_]+$/.test(error.code) ? error.code : "local_ai_unavailable" }); }
       }
       if (method === "GET") {
         if (state.status === "user_pending") {
@@ -220,12 +242,15 @@ export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1",
       }
       if (req.url === "/v1/resume") {
         if (raw.length || !["user_pending", "user_failed"].includes(state.status)) return reply(409, { error: "no_user_phase_to_resume" });
+        if (pcLocalAi?.isBusy?.() || pcMaintenance?.isBusy?.()) return reply(409, { error: "user_task_busy" });
+        if (pcLocalAi && (await pcLocalAi.status()).job_status === "running") return reply(409, { error: "user_task_running" });
         const outcome = await resumeUser();
         await report({ status: "user_pending", version: state.version, started_at: new Date().toISOString() });
         return reply(202, { status: outcome?.status === "queued" ? "queued" : "waiting_for_login", version: state.version });
       }
       if (state.status === "running") return reply(409, { error: "update_running" });
-      if (pcMaintenance?.isBusy?.()) return reply(409, { error: "maintenance_busy" });
+      if (pcMaintenance?.isBusy?.() || pcLocalAi?.isBusy?.()) return reply(409, { error: "maintenance_busy" });
+      if (pcLocalAi && (await pcLocalAi.status()).job_status === "running") return reply(409, { error: "user_task_running" });
       const offer = validateUpdateOffer(JSON.parse(raw.toString("utf8")));
       // Response first: the updater might restart the caller MCP service.
       await report({ status: "running", version: offer.version });
@@ -316,8 +341,10 @@ export async function runUpdaterService() {
   const tunnelAdapter = createWindowsTunnelAdapter();
   const pcMaintenance = createPcMaintenanceController({ ...tunnelAdapter,
     staging: createKtkStageAdapter({ dataRoot, keyText }), ...createPrivateMaintenanceReceiptStore(dataRoot) });
+  const pcLocalAi = createLocalAiRemoteController({ inspect: inspectKtkUserTask,
+    queue: job => queueKtkLocalAiJob(job, { dataRoot }) });
   const server = createUpdaterServer({ keyText, updaterRoot, dataRoot, initialStatus,
-    checkUser: inspectFixedUserTask, resumeUser: runFixedUserTask, pcMaintenance });
+    checkUser: inspectFixedUserTask, resumeUser: runFixedUserTask, pcMaintenance, pcLocalAi });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(18765, "127.0.0.1", resolve); });
   process.stdout.write("KTK update service ready on loopback\n");
 }

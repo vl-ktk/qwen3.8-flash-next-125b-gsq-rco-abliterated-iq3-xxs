@@ -19,6 +19,8 @@ export const TOOL_SCOPES = Object.freeze({
   pc_performance_advice: "qwen:read",
   pc_maintenance_preview: "qwen:read", pc_maintenance_status: "qwen:read",
   pc_maintenance_apply: "qwen:maintenance",
+  local_ai_install_status: "qwen:read", local_ai_health: "qwen:read", model_status: "qwen:read",
+  local_ai_install_prepare: "qwen:read", local_ai_install_resume: "qwen:localai:install", local_ai_repair: "qwen:localai:install",
   update_status: "qwen:read", update_apply: "qwen:update", update_resume: "qwen:update",
 });
 const VERSION = /^0\.18\.[1-9]\d{0,3}$/;
@@ -181,6 +183,20 @@ export class QwenOAuthState extends DurableObject {
               typeof args.plan_id !== "string" || !/^[a-f0-9]{32}$/.test(args.plan_id) ||
               args.confirmation !== `CONFIRM KTK MAINTENANCE ${args.plan_id}`)
             return json(400, { error: "invalid_maintenance_request" });
+        }
+        if (message.params.name === "local_ai_install_prepare") {
+          const args = message.params.arguments;
+          if (!args || Array.isArray(args) || typeof args !== "object" ||
+              Object.keys(args).join() !== "operation" || !["prepare", "repair"].includes(args.operation))
+            return json(400, { error: "invalid_local_ai_request" });
+        }
+        if (["local_ai_install_resume", "local_ai_repair"].includes(message.params.name)) {
+          const args = message.params.arguments;
+          if (!args || Array.isArray(args) || typeof args !== "object" ||
+              Object.keys(args).sort().join() !== "confirmation,plan_id" ||
+              typeof args.plan_id !== "string" || !/^[a-f0-9]{32}$/.test(args.plan_id) ||
+              args.confirmation !== `CONFIRM KTK LOCAL AI ${args.plan_id}`)
+            return json(400, { error: "invalid_local_ai_request" });
         }
         if (message.params.name === "pc_maintenance_preview") {
           const args = message.params.arguments;

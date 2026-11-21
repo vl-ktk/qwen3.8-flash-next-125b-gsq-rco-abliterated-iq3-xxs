@@ -20,7 +20,7 @@ async function fixture(t) {
   await mkdir(path.join(sourceRoot, "src/windows"), { recursive: true });
   await mkdir(path.join(sourceRoot, "scripts"), { recursive: true });
   await mkdir(path.join(sourceRoot, "config"), { recursive: true });
-  for (const name of ["admin-cli", "administration", "device-identity", "device-bootstrap", "device-enrollment", "device-selftest", "device-revocation", "emergency-lock", "main", "mcp-server", "model-preflight", "pc-diagnostics", "pc-maintenance", "pc-updater-staging", "monitoring", "origin-auth", "windows-tools", "strata-installer", "sc117-model", "sc117-inference", "local-ai-setup", "remote-update"]) {
+  for (const name of ["admin-cli", "administration", "device-identity", "device-bootstrap", "device-enrollment", "device-selftest", "device-revocation", "emergency-lock", "main", "mcp-server", "model-preflight", "pc-diagnostics", "pc-maintenance", "pc-updater-staging", "monitoring", "origin-auth", "windows-tools", "strata-installer", "sc117-model", "sc117-inference", "local-ai-setup", "local-ai-remote", "remote-update"]) {
     await writeFile(path.join(sourceRoot, `src/windows/${name}.mjs`), `export const ${name.replace(/-/g, "_")} = true;\n`);
   }
   await writeFile(path.join(sourceRoot, "src/windows/strata-runtime.lock.json"), '{}\n');
@@ -43,6 +43,7 @@ async function fixture(t) {
   await writeFile(path.join(sourceRoot, "scripts/Set-KTKLocalAIOptIn.ps1"), "# admin-only opt-in after local AI acceptance\n");
   await writeFile(path.join(sourceRoot, "scripts/Install-KTKUserUpdater.ps1"), "# user task registration\n");
   await writeFile(path.join(sourceRoot, "scripts/Run-KTKUserUpdate.mjs"), "export const userUpdater = true;\n");
+  await writeFile(path.join(sourceRoot, "scripts/Run-KTKLocalAIJob.mjs"), "export const localAiUserJob = true;\n");
   await writeFile(path.join(sourceRoot, "scripts/Apply-KTKUnifiedRelease.ps1"), "# fixed verified release transaction\n");
   await writeFile(path.join(sourceRoot, "scripts/Run-KTKRemoteUpdate.ps1"), "# fixed privileged update\n");
   await writeFile(path.join(sourceRoot, "scripts/Run-KTKUpdater.mjs"), "export const updater = true;\n");
@@ -78,7 +79,7 @@ async function fixture(t) {
 test("step 15 payload is reproducible, manifest-verified, without secrets or install actions", async t => {
   const f = await fixture(t);
   const result = await buildWindowsPackage(f);
-  assert.equal(result.fileCount, 61);
+  assert.equal(result.fileCount, 63);
   assert.equal(result.manifest.ready_for_installation, false);
   assert.equal(result.manifest.source_commit, f.sourceSha);
   assert.equal(result.manifest.target, "windows-x64");
@@ -88,7 +89,7 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(result.sha256, await sha256File(f.outFile));
   assert.equal((await readFile(f.outFile + ".sha256", "utf8")).trim(), `${result.sha256}  ${path.basename(f.outFile)}`);
   const zipFiles = (await run("unzip", ["-Z1", f.outFile])).stdout.trim().split("\n");
-  assert.equal(zipFiles.length, 61);
+  assert.equal(zipFiles.length, 63);
   assert.equal(zipFiles.includes("runtime/main.mjs"), true);
   assert.equal(zipFiles.includes("runtime/model-preflight.mjs"), true);
   assert.equal(zipFiles.includes("runtime/pc-diagnostics.mjs"), true);
@@ -100,12 +101,14 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(zipFiles.includes("runtime/sc117-model.lock.json"), true);
   assert.equal(zipFiles.includes("runtime/sc117-inference.mjs"), true);
   assert.equal(zipFiles.includes("runtime/local-ai-setup.mjs"), true);
+  assert.equal(zipFiles.includes("runtime/local-ai-remote.mjs"), true);
   assert.equal(zipFiles.includes("runtime/remote-update.mjs"), true);
   assert.equal(zipFiles.includes("runtime/Run-KTKUpdater.mjs"), true);
   assert.equal(zipFiles.includes("Install-KTKUpdater.ps1"), true);
   assert.equal(zipFiles.includes("Set-KTKLocalAIOptIn.ps1"), true);
   assert.equal(zipFiles.includes("Install-KTKUserUpdater.ps1"), true);
   assert.equal(zipFiles.includes("Run-KTKUserUpdate.mjs"), true);
+  assert.equal(zipFiles.includes("Run-KTKLocalAIJob.mjs"), true);
   assert.equal(zipFiles.includes("Apply-KTKUnifiedRelease.ps1"), true);
   assert.equal(zipFiles.includes("Run-KTKRemoteUpdate.ps1"), true);
   assert.equal(zipFiles.includes("services/KTKQwenUpdater.xml"), true);
@@ -134,7 +137,7 @@ test("step 15 payload is reproducible, manifest-verified, without secrets or ins
   assert.equal(zipFiles.some(name => /(?:^|\/)\.env(?:$|\.)|\.test\.mjs$|key\.pem|private|\.git|token/i.test(name)), false);
   assert.doesNotMatch((await readZip(f.outFile, "README.txt")).toString("utf8"), /DO_NOT_BUNDLE_SECRET/);
   const manifest = JSON.parse(await readZip(f.outFile, "MANIFEST.json"));
-  assert.equal(manifest.files.length, 59);
+  assert.equal(manifest.files.length, 61);
   for (const record of manifest.files) assert.equal(fakeHash(await readZip(f.outFile, record.path)), record.sha256);
   await assert.rejects(() => buildWindowsPackage(f), /package_output_exists/);
   const other = { ...f, outFile: path.join(f.root, "out", "second.zip") };
