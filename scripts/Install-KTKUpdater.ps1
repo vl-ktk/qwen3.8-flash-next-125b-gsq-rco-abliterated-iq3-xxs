@@ -26,11 +26,22 @@ function Set-KTKPublicJobAcl {
     } else { New-Item -ItemType Directory -Path $public -ErrorAction Stop | Out-Null }
     & icacls.exe $public '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'updater_public_acl_failed' }
+    # /grant:r replaces only listed trustees. On Windows 11 the newly created
+    # directory can retain unrelated explicit grants, so remove those first.
+    $permitted = @('S-1-5-18','S-1-5-32-544','S-1-5-32-545')
     $acl = Get-Acl -LiteralPath $public
     if (-not $acl.AreAccessRulesProtected) { throw 'updater_public_acl_untrusted' }
     foreach ($ace in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
         if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
-            $ace.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544','S-1-5-32-545')) { throw 'updater_public_acl_untrusted' }
+            $ace.IdentityReference.Value -notin $permitted) {
+            & icacls.exe $public '/remove:g' ('*' + $ace.IdentityReference.Value) | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'updater_public_acl_failed' }
+        }
+    }
+    $acl = Get-Acl -LiteralPath $public
+    foreach ($ace in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+        if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $ace.IdentityReference.Value -notin $permitted) { throw 'updater_public_acl_untrusted' }
     }
 }
 function Assert-OwnedUpdaterDirectory([string]$Folder) {
