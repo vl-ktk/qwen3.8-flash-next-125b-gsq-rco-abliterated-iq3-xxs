@@ -58,7 +58,9 @@ test("unmarked, forged, unknown, symlinked, stale-looking and crowded KTK stagin
   const staging = createKtkStageAdapter({ dataRoot: root, keyText, now: () => earlier + 25 * HOUR });
   await mkdir(path.join(root, "update-123abc"));
   await writeFile(path.join(root, "update-123abc", "artifact.zip"), "foreign");
-  const forged = path.join(root, "update-123aBc");
+  // Windows NTFS is case-insensitive: use a distinct name, not a case-only
+  // variant of update-123abc (Linux would accept that misleading fixture).
+  const forged = path.join(root, "update-7bA9zQ");
   await mkdir(forged);
   await markKtkUpdateStage(forged, keyText, earlier);
   const marker = JSON.parse(await readFile(path.join(forged, "ktk-stage-owner.json"), "utf8"));
