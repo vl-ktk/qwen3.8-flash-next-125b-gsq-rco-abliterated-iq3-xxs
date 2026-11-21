@@ -6,7 +6,7 @@ import path from "node:path";
 import { collectWindowsMonitoring, queryNvidiaGpus } from "./monitoring.mjs";
 import { getAdminStatus, WINDOWS_MCP_VERSION } from "./administration.mjs";
 import { normalizePcPreflight, normalizeStorageCheck, normalizeRuntimeCheck, buildInstallationPlan } from "./model-preflight.mjs";
-import { normalizePcFullAudit, normalizePcGpuAudit, normalizePcStorageAudit, normalizePcMemoryAudit, normalizePcInstallDiagnostics, buildPcReadinessReport } from "./pc-diagnostics.mjs";
+import { normalizePcFullAudit, normalizePcGpuAudit, normalizePcStorageAudit, normalizePcMemoryAudit, normalizePcInstallDiagnostics, buildPcReadinessReport, buildPcPerformanceRecommendations } from "./pc-diagnostics.mjs";
 import { callLocalUpdater, validateUpdateOffer } from "./remote-update.mjs";
 import { validateMaintenancePreview, validateMaintenanceApply } from "./pc-maintenance.mjs";
 
@@ -261,7 +261,7 @@ try {
 function validate(name, args) {
   if (!isRecord(args)) throw safeError("invalid_arguments");
   const keys = Object.keys(args);
-  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_storage_mapping", "pc_memory_audit", "pc_install_diagnostics", "pc_user_task_status", "pc_readiness_report", "pc_maintenance_status", "update_status", "update_resume"].includes(name)) {
+  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_storage_mapping", "pc_memory_audit", "pc_install_diagnostics", "pc_user_task_status", "pc_readiness_report", "pc_performance_advice", "pc_maintenance_status", "update_status", "update_resume"].includes(name)) {
     if (keys.length) throw safeError("invalid_arguments");
     return {};
   }
@@ -373,9 +373,14 @@ const DEFINITIONS = Object.freeze({
     name: "pc_readiness_report", description: "Combine fresh read-only Windows 11, NVIDIA, NVMe, RAM and KTK diagnostics into blockers, next actions and unknowns. No model download or execution.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
+  pc_performance_advice: {
+    name: "pc_performance_advice", description: "Read-only Windows 11 RAM/VRAM pressure and conservative performance recommendations. Never clears RAM, resets GPU, disables apps, changes power settings or starts the local AI model.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
   pc_maintenance_preview: {
-    name: "pc_maintenance_preview", description: "Read-only preview of EXACT KTK Tunnel service start or rollback, including state, risk, a one-use owner chat confirmation and zero freed RAM. No prompt or action on the PC.",
-    inputSchema: { type: "object", properties: { action: { type: "string", enum: ["start_ktk_tunnel", "rollback_ktk_tunnel"] } }, required: ["action"], additionalProperties: false },
+    name: "pc_maintenance_preview", description: "Read-only preview of exact KTK Tunnel service start, delayed autostart configuration or their rollback, including risk and one-use owner chat confirmation. No prompt or action on the PC.",
+    inputSchema: { type: "object", properties: { action: { type: "string", enum: ["start_ktk_tunnel", "rollback_ktk_tunnel", "enable_ktk_tunnel_autostart", "rollback_ktk_tunnel_autostart"] } }, required: ["action"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false },
   },
   pc_maintenance_apply: {
@@ -452,7 +457,7 @@ async function readAllowedFile(filePath, roots) {
 export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery, readNvidia = queryNvidiaGpus, identityConfigured = false,
   updater = callLocalUpdater, updaterKey = null } = {}) {
   if (!Array.isArray(allowedFileRoots) || allowedFileRoots.some(root => typeof root !== "string" || !path.isAbsolute(root))) throw safeError("invalid_file_roots");
-  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", ...(updaterKey ? ["pc_maintenance_preview", "pc_maintenance_apply", "pc_maintenance_status", "update_status", "update_apply", "update_resume"] : []), ...(allowedFileRoots.length ? ["file_read"] : [])];
+  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "pc_performance_advice", ...(updaterKey ? ["pc_maintenance_preview", "pc_maintenance_apply", "pc_maintenance_status", "update_status", "update_apply", "update_resume"] : []), ...(allowedFileRoots.length ? ["file_read"] : [])];
   const safeGpu = async () => {
     try { return await readNvidia(); } catch { return { status: "unavailable", reason: "gpu_inventory_failed", gpus: [] }; }
   };
@@ -515,6 +520,11 @@ export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQue
         const outcomes = await Promise.allSettled(names.map(readPcAudit));
         const [full, gpu, storage, memory, install] = outcomes.map(outcome => outcome.status === "fulfilled" ? outcome.value : null);
         return buildPcReadinessReport({ full, gpu, storage, memory, install });
+      }
+      if (name === "pc_performance_advice") {
+        const outcomes = await Promise.allSettled(["pc_full_audit", "pc_gpu_audit", "pc_memory_audit"].map(readPcAudit));
+        const [full, gpu, memory] = outcomes.map(outcome => outcome.status === "fulfilled" ? outcome.value : null);
+        return buildPcPerformanceRecommendations({ full, gpu, memory });
       }
       if (name === "installation_plan") {
         // Fail individual observations closed, rather than presenting a partial

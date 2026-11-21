@@ -16,6 +16,7 @@ export const TOOL_SCOPES = Object.freeze({
   pc_full_audit: "qwen:read", pc_gpu_audit: "qwen:read",
   pc_storage_audit: "qwen:read", pc_memory_audit: "qwen:read",
   pc_install_diagnostics: "qwen:read", pc_readiness_report: "qwen:read",
+  pc_performance_advice: "qwen:read",
   pc_maintenance_preview: "qwen:read", pc_maintenance_status: "qwen:read",
   pc_maintenance_apply: "qwen:maintenance",
   update_status: "qwen:read", update_apply: "qwen:update", update_resume: "qwen:update",
@@ -184,7 +185,7 @@ export class QwenOAuthState extends DurableObject {
         if (message.params.name === "pc_maintenance_preview") {
           const args = message.params.arguments;
           if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).join() !== "action" ||
-              !["start_ktk_tunnel", "rollback_ktk_tunnel"].includes(args.action))
+              !["start_ktk_tunnel", "rollback_ktk_tunnel", "enable_ktk_tunnel_autostart", "rollback_ktk_tunnel_autostart"].includes(args.action))
             return json(400, { error: "invalid_maintenance_request" });
         }
         if (message.params.name === "update_apply") {

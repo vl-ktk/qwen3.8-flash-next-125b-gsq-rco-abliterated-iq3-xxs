@@ -10,10 +10,11 @@ import { createUpdaterServer, callLocalUpdater, createPrivateMaintenanceReceiptS
 test("MCP maintenance uses LocalSystem updater without any interactive PC approval", async t => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ktk-maintenance-gate-"));
   t.after(() => rm(dataRoot, { force: true, recursive: true }));
-  let state = "Stopped"; let mutations = 0;
+  let state = "Stopped"; let startType = "Manual"; let mutations = 0;
   const maintenance = createPcMaintenanceController({
-    queryService: async () => ({ name: "KTKQwenTunnel", owner_verified: true, status: state, start_type: "Manual" }),
+    queryService: async () => ({ name: "KTKQwenTunnel", owner_verified: true, status: state, start_type: startType }),
     startService: async () => { state = "Running"; mutations++; }, stopService: async () => { state = "Stopped"; mutations++; },
+    configureService: async (_name, type) => { startType = type; mutations++; },
     ...createPrivateMaintenanceReceiptStore(dataRoot),
   });
   const keyText = randomBytes(32).toString("base64url");
@@ -48,6 +49,16 @@ test("MCP maintenance uses LocalSystem updater without any interactive PC approv
   assert.equal((await call("maintenance_apply", { plan_id: undo.plan_id, confirmation: undo.owner_chat_confirmation })).status, "rolled_back");
   assert.equal(mutations, 2);
   assert.equal((await call("maintenance_status")).rollback_available, false);
+  // A separate SYSTEM-backed administrative change needs no local UAC prompt.
+  state = "Running";
+  const autostart = await call("maintenance_preview", { action: "enable_ktk_tunnel_autostart" });
+  assert.equal(autostart.requires_pc_confirmation, false);
+  const enabled = await call("maintenance_apply", { plan_id: autostart.plan_id, confirmation: autostart.owner_chat_confirmation });
+  assert.equal(enabled.after_start_type, "Automatic");
+  assert.equal(mutations, 3);
+  const restore = await call("maintenance_preview", { action: "rollback_ktk_tunnel_autostart" });
+  assert.equal((await call("maintenance_apply", { plan_id: restore.plan_id, confirmation: restore.owner_chat_confirmation })).restored_start_type, "Manual");
+  assert.equal(mutations, 4);
 });
 
 test("maintenance receipts persist across controller restart and never expose raw paths", async t => {

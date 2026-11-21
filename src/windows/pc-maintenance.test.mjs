@@ -11,6 +11,7 @@ const fixture = () => {
     queryService: async () => ({ ...state }),
     startService: async () => { changed++; state = { ...state, status: "Running" }; },
     stopService: async () => { changed++; state = { ...state, status: "Stopped" }; },
+    configureService: async (_service, type) => { changed++; state = { ...state, start_type: type }; },
     readReceipt: async () => receipt,
     writeReceipt: async next => { receipt = { ...next }; },
     now: () => time,
@@ -49,6 +50,34 @@ test("approved one-time plan starts only stopped KTK tunnel, verifies result, pe
   assert.equal(undone.status, "rolled_back");
   assert.equal(f.change(), 2);
   assert.equal((await f.controller.status()).rollback_available, false);
+});
+
+test("owner-chat operation enables only KTK Tunnel autostart without restarting service or AI and rolls back exact configuration", async () => {
+  const f = fixture(); f.setState({ status: "Running" });
+  const plan = await f.controller.preview({ action: "enable_ktk_tunnel_autostart" });
+  assert.equal(plan.status, "ready_for_owner_confirmation");
+  assert.equal(plan.requires_pc_confirmation, false);
+  assert.equal(plan.current_start_type, "Manual");
+  assert.equal(f.change(), 0);
+  const applied = await f.controller.apply({ plan_id: plan.plan_id, confirmation: plan.owner_chat_confirmation });
+  assert.equal(applied.after, "Running");
+  assert.equal(applied.after_start_type, "Automatic");
+  assert.equal(applied.rollback_action, "rollback_ktk_tunnel_autostart");
+  assert.deepEqual(f.receipt(), { schema: 1, action: "enable_ktk_tunnel_autostart", before: "Running",
+    before_start_type: "Manual", transaction_id: applied.transaction_id, status: "applied", service: "KTKQwenTunnel" });
+  assert.equal(f.change(), 1);
+  const undone = await f.controller.preview({ action: "rollback_ktk_tunnel_autostart" });
+  assert.equal(undone.status, "ready_for_owner_confirmation");
+  assert.equal((await f.controller.apply({ plan_id: undone.plan_id, confirmation: undone.owner_chat_confirmation })).restored_start_type, "Manual");
+  assert.equal(f.change(), 2);
+  assert.equal((await f.controller.status()).rollback_available, false);
+});
+
+test("changing or already automatic KTK Tunnel configuration blocks unsupported autostart plans", async () => {
+  const f = fixture(); f.setState({ status: "Running", start_type: "Automatic" });
+  assert.equal((await f.controller.preview({ action: "enable_ktk_tunnel_autostart" })).reason, "tunnel_not_running_manual");
+  assert.equal((await f.controller.preview({ action: "rollback_ktk_tunnel_autostart" })).reason, "no_reversible_maintenance");
+  assert.equal(f.change(), 0);
 });
 
 test("disabled, running, missing or untrusted service never gets changed", async () => {
@@ -111,7 +140,19 @@ test("native SCM adapter invokes only absolute sc.exe and rejects foreign servic
   assert.deepEqual(snapshot, good());
   await adapter.startService();
   await adapter.stopService();
-  assert.deepEqual(commands.map(c => c.args), [["qc", "KTKQwenTunnel"], ["query", "KTKQwenTunnel"], ["start", "KTKQwenTunnel"], ["stop", "KTKQwenTunnel"]]);
+  await adapter.configureService(null, "Automatic");
+  await adapter.configureService(null, "Manual");
+  assert.deepEqual(commands.map(c => c.args), [["qc", "KTKQwenTunnel"], ["query", "KTKQwenTunnel"], ["start", "KTKQwenTunnel"], ["stop", "KTKQwenTunnel"],
+    ["config", "KTKQwenTunnel", "start=", "delayed-auto"], ["config", "KTKQwenTunnel", "start=", "demand"]]);
+  await assert.rejects(() => adapter.configureService(null, "disabled"), /invalid_maintenance_action/);
   for (const c of commands) { assert.equal(c.exe, "C:\\Windows\\System32\\sc.exe"); assert.equal(c.opts.shell, false); }
   assert.throws(() => createWindowsTunnelAdapter({ platform: "linux" }), /maintenance_windows_only/);
+});
+
+test("Windows 11 delayed-auto KTK tunnel SCM response is recognized without weakening binary ownership", async () => {
+  const adapter = createWindowsTunnelAdapter({ platform: "win32", windowsRoot: "C:\\Windows", programFiles: "C:\\Program Files",
+    invokeCommand: async (_exe, args) => ({ stdout: args[0] === "qc" ?
+      'BINARY_PATH_NAME : "C:\\Program Files\\KTK\\QwenMCP\\KTKQwenTunnel.exe"\r\n START_TYPE : 2 AUTO_START (DELAYED)\r\n' :
+      'STATE : 4 RUNNING\r\n' }) });
+  assert.deepEqual(await adapter.queryService(), { name: "KTKQwenTunnel", status: "Running", start_type: "Automatic", owner_verified: true });
 });

@@ -1015,7 +1015,7 @@ test("step 10: real loopback Windows server interoperates with OAuth gateway and
   assert.deepEqual((await discover.json()).result.supportedVersions, ["2026-07-28", "2025-11-25"]);
   const listed = await f.mcp(access_token, "tools/list", modernParams, { ...modernHeaders, "mcp-method": "tools/list" });
   assert.equal(listed.status, 200, await listed.clone().text());
-  assert.deepEqual((await listed.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report"]);
+  assert.deepEqual((await listed.json()).result.tools.map(tool => tool.name), ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "pc_performance_advice"]);
   const called = await f.mcp(access_token, "tools/call", { ...modernParams, name: "system_info", arguments: {} }, { ...modernHeaders, "mcp-method": "tools/call", "mcp-name": "system_info" });
   assert.equal(called.status, 200, await called.clone().text());
   assert.equal(JSON.parse((await called.json()).result.content[0].text).source, "windows-test-double");

@@ -154,3 +154,34 @@ export function buildPcReadinessReport({ full, gpu, storage, memory, install }) 
     note: "Not a CUDA or model acceptance test. No installation, model download or system configuration took place.",
   };
 }
+
+// Stage 2 advice is deliberately read-only. Windows power plans, startup apps,
+// pagefile policy and third-party processes are never changed from remote MCP.
+export function buildPcPerformanceRecommendations({ full, gpu, memory }) {
+  const gib = 1024 ** 3;
+  const available = memory?.ram?.available_bytes ?? full?.ram?.free_bytes ?? null;
+  const gpus = Array.isArray(gpu?.gpus) ? gpu.gpus : [];
+  const vram = gpus.map(g => ({ index: g.index, free_bytes: g.vram_free_bytes, total_bytes: g.vram_total_bytes }));
+  const recommendations = [];
+  if (available !== null && available < 16 * gib) recommendations.push("review_high_ram_usage_before_manual_model_load");
+  if (vram.some(g => g.total_bytes && g.free_bytes !== null && g.free_bytes < g.total_bytes / 2))
+    recommendations.push("review_gpu_apps_before_manual_model_load");
+  if (full?.pending_reboot === true) recommendations.push("review_pending_reboot_before_installation");
+  if (full?.os?.windows_11 === false) recommendations.push("use_recorded_windows_11_target_for_model");
+  return {
+    mode: "advice_only_no_pc_changes", target_os: "Windows 11 x64",
+    ram_available_bytes: available, gpu_free_bytes: vram,
+    recommendations, unknowns: [
+      "power_plan_not_measured", "startup_apps_not_measured", "pagefile_policy_not_measured",
+      "gpu_process_vram_attribution_not_guaranteed", "cuda_execution_not_tested",
+    ],
+    safe_manual_review: [
+      "Windows 11 Settings > System > Power & battery > Power mode; review the performance setting.",
+      "Windows 11 Task Manager > Startup apps; review non-KTK apps without automatic disabling.",
+      "Windows 11 Settings > System > Storage; use built-in recommendations rather than remote file deletion.",
+      "Review the Windows-managed pagefile and pending reboot; do not force an undocumented fixed size.",
+      "Close competing RAM/VRAM-heavy apps manually before pressing Load model; the MCP will not kill them.",
+    ],
+    note: "No RAM cache clearing, GPU reset, driver update, third-party process stop, OS cleanup, registry edit or model load occurred.",
+  };
+}
