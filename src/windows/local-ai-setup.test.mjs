@@ -68,6 +68,44 @@ test("explicit cancellation stops before Strata/model and reports safely retaine
   assert.equal(result.retained, "verified_and_partial_artifacts");
 });
 
+test("pausing one attempt and resuming another retains the explicit one-time acceptance gate", async t => {
+  let pause = true;
+  const f = await fixture(t, { cancelRequested: async () => pause && f.calls.includes("model") });
+  await assert.rejects(runLocalAiSetup(f.opts), /localai_user_cancelled/);
+  assert.equal(f.calls.includes("inference"), false);
+  pause = false;
+  const result = await runLocalAiSetup(f.opts);
+  assert.equal(result.runtime_state, "stopped");
+  assert.equal(f.calls.filter(step => step === "inference").length, 1);
+});
+
+test("a previously interrupted owned Strata install is recovered before inference and retried once", async t => {
+  let starts = 0;
+  const f = await fixture(t, {
+    installRuntime: async () => {
+      f.calls.push("strata");
+      if (++starts === 1) throw Object.assign(Error("incomplete"), { code: "strata_existing_install_unrecognized" });
+      return { status: "installed" };
+    },
+    recoverRuntime: async ({ ownerApproved }) => {
+      assert.equal(ownerApproved, true);
+      f.calls.push("recover");
+      return { status: "incomplete_install_removed" };
+    },
+  });
+  assert.equal((await runLocalAiSetup(f.opts)).runtime_state, "stopped");
+  assert.deepEqual(f.calls, ["lock", "strata", "recover", "strata", "model", "inference", "unlock"]);
+});
+
+test("unrecognized Strata tree is never erased or passed to inference", async t => {
+  const f = await fixture(t, {
+    installRuntime: async () => { f.calls.push("strata"); throw Object.assign(Error("unrecognized"), { code: "strata_existing_install_unrecognized" }); },
+    recoverRuntime: async () => { f.calls.push("recover"); throw Object.assign(Error("untrusted"), { code: "strata_recovery_denied" }); },
+  });
+  await assert.rejects(runLocalAiSetup(f.opts), /strata_recovery_denied/);
+  assert.deepEqual(f.calls, ["lock", "strata", "recover", "unlock"]);
+});
+
 test("cancel timer aborts stalled model download and never starts inference", async t => {
   const f = await fixture(t, {
     cancelRequested: async () => f.calls.includes("model"),
@@ -107,6 +145,15 @@ test("one action runs A>B>C>D and records success with no credentials", async t 
   assert.equal(report.status, "passed");
   assert.equal(report.inference_verified, true);
   assert.equal(report.runtime_state, "stopped");
+  // Preflight data must describe real resources, not invented GPU/SSD facts.
+  const observed = [];
+  const f2 = await fixture(t, { reportFactory: async () => ({ status: value => observed.push(value), result: async () => {} }) });
+  await runLocalAiSetup(f2.opts);
+  const preflight = observed.find(value => value.phase === "preflight_complete");
+  assert.equal(preflight.detail.ram_gib, 64);
+  assert.equal(preflight.detail.vram_gib, 23);
+  assert.deepEqual(preflight.detail.drives, [{ drive: "D:", free_gib: 130 }]);
+  assert.ok(preflight.detail.download_bytes > 76_000_000_000);
   assert.doesNotMatch(json + JSON.stringify(report), /api_key|authorization|password|secret/i);
 });
 

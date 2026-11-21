@@ -33,6 +33,12 @@ test("integrated live installer defaults to MCP-only and requires explicit AI se
   assert.match(localAiGui, /cancel-request\.txt/);
   assert.match(localAiGui, /localai_user_cancelled/);
   assert.match(localAiGui, /\$result\.runtime_state -eq 'stopped'/);
+  assert.match(localAiGui, /function Start-KTKLocalAIAttempt/);
+  assert.match(localAiGui, /\$action\.Text = 'Продолжить'/);
+  assert.match(localAiGui, /\$action\.Text = 'Повторить'/);
+  assert.match(localAiGui, /\$script:cancelRequested = \$true/);
+  assert.match(localAiGui, /\$fresh = \[DateTimeOffset\]::Parse\(\[string\]\$current\.at\)\.UtcDateTime -ge \$script:shownUtc/);
+  assert.doesNotMatch(localAiGui, /MessageBox/);
   assert.match(localAiGui, /if \(\$script:cancelled\) \{ exit 2 \}/);
 });
 
