@@ -66,11 +66,11 @@ jobs:
         run: node --test src/windows/remote-update.test.mjs
       - name: Native Windows diagnostic tests with strict read-only contracts
         run: node --test src/windows/pc-diagnostics.test.mjs
-      - name: Parse all six embedded Windows 11 diagnostic scripts as PowerShell 5.1 (no execution)
+      - name: Parse all seven embedded Windows 11 diagnostic scripts as PowerShell 5.1 (no execution)
         shell: powershell
         run: |
           $scripts = & node .github/tests/diagnostic-contract.mjs --scripts | ConvertFrom-Json
-          if ($scripts.Count -ne 6) { throw 'Missing embedded diagnostic script' }
+          if ($scripts.Count -ne 7) { throw 'Missing embedded diagnostic script' }
           foreach ($entry in $scripts) {
             $errors = $null; $tokens = $null
             $null = [System.Management.Automation.Language.Parser]::ParseInput($entry.script, [ref]$tokens, [ref]$errors)

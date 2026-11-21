@@ -216,11 +216,6 @@ $services = @($names | ForEach-Object {
   if ($service) { [pscustomobject]@{ name=$service.Name; status=$service.Status.ToString()
     start_type=$service.StartType.ToString() } }
 })
-$taskStatus = 'unknown'
-try {
-  $task = Get-ScheduledTask -TaskName 'KTKQwenUserUpdater' -ErrorAction SilentlyContinue
-  if ($task) { $taskStatus = $task.State.ToString() } else { $taskStatus = 'not_found' }
-} catch {}
 $pending = $null
 try {
   $pending = (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') -or
@@ -245,17 +240,27 @@ try {
     $updaterStatus = [pscustomobject]@{ status=$state.status; version=$state.version; code=$state.code }
   }
 } catch {}
-[pscustomobject]@{ services=$services; user_task_status=$taskStatus; pending_reboot=$pending
+[pscustomobject]@{ services=$services; pending_reboot=$pending
   mcp_directory_exists=$mcpDirectory; cuda_driver_dll_present=$cudaDriverDll
   strata_processes=$strataProcesses; updater_status=$updaterStatus } |
   ConvertTo-Json -Depth 5 -Compress
+`,
+  // Task Scheduler may block for tens of seconds on some Windows machines.
+  // Treat this metadata as an optional, separately timed read-only source.
+  pc_user_task_status: PREFIX + `
+$taskStatus = 'unknown'
+try {
+  $task = Get-ScheduledTask -TaskName 'KTKQwenUserUpdater' -ErrorAction SilentlyContinue
+  if ($task) { $taskStatus = $task.State.ToString() } else { $taskStatus = 'not_found' }
+} catch {}
+[pscustomobject]@{ user_task_status=$taskStatus } | ConvertTo-Json -Depth 3 -Compress
 `,
 });
 
 function validate(name, args) {
   if (!isRecord(args)) throw safeError("invalid_arguments");
   const keys = Object.keys(args);
-  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_storage_mapping", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", "update_status", "update_resume"].includes(name)) {
+  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_storage_mapping", "pc_memory_audit", "pc_install_diagnostics", "pc_user_task_status", "pc_readiness_report", "update_status", "update_resume"].includes(name)) {
     if (keys.length) throw safeError("invalid_arguments");
     return {};
   }
@@ -297,7 +302,7 @@ export async function runPowerShellQuery(name, args, { platform = process.platfo
   let result;
   try {
     result = await invoke(exe, ["-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", script], {
-      windowsHide: true, shell: false, timeout: name === "pc_storage_mapping" ? 9000 : name === "system_monitor" ? 12000 : ["pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics"].includes(name) ? 30000 : 8000, maxBuffer: MAX_TEXT, encoding: "utf8", env,
+      windowsHide: true, shell: false, timeout: ["pc_storage_mapping", "pc_user_task_status"].includes(name) ? 9000 : name === "system_monitor" ? 12000 : ["pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics"].includes(name) ? 30000 : 8000, maxBuffer: MAX_TEXT, encoding: "utf8", env,
     });
   } catch { throw safeError("powershell_unavailable"); }
   if (typeof result.stdout !== "string" || Buffer.byteLength(result.stdout, "utf8") > MAX_TEXT) throw safeError("powershell_unavailable");
@@ -455,7 +460,12 @@ export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQue
       })) : null });
     }
     if (name === "pc_memory_audit") return normalizePcMemoryAudit(await runWindowsQuery(name, {}), await safeGpu());
-    if (name === "pc_install_diagnostics") return normalizePcInstallDiagnostics(await runWindowsQuery(name, {}));
+    if (name === "pc_install_diagnostics") {
+      const machine = await runWindowsQuery(name, {});
+      let task = null;
+      try { task = await runWindowsQuery("pc_user_task_status", {}); } catch { /* Unknown task state; retain machine facts. */ }
+      return normalizePcInstallDiagnostics({ ...machine, user_task_status: task?.user_task_status ?? machine?.user_task_status });
+    }
     throw safeError("unknown_tool");
   };
   return {
