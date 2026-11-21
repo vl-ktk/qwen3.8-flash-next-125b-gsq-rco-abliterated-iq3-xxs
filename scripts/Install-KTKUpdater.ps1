@@ -6,7 +6,7 @@ Set-StrictMode -Version Latest
 if ([bool]$Live -eq [bool]$CheckOnly) { throw 'choose_live_or_check_only' }
 $source = Split-Path -Parent $MyInvocation.MyCommand.Path
 & (Join-Path $source 'Verify-KTKPackage.ps1') | Out-Null
-$required = @('bin\node.exe','bin\WinSW.exe','runtime\remote-update.mjs','runtime\origin-auth.mjs',
+$required = @('bin\node.exe','bin\WinSW.exe','runtime\remote-update.mjs','runtime\pc-maintenance.mjs','runtime\origin-auth.mjs',
   'runtime\Run-KTKUpdater.mjs','Run-KTKRemoteUpdate.ps1','services\KTKQwenUpdater.xml')
 foreach ($file in $required) { if (-not (Test-Path -LiteralPath (Join-Path $source $file) -PathType Leaf)) { throw 'updater_payload_incomplete' } }
 if (-not [Environment]::Is64BitOperatingSystem -or [Environment]::OSVersion.Version.Build -lt 19045) { throw 'updater_windows_10_22h2_required' }
@@ -57,7 +57,7 @@ if ($existing) {
         # the currently working SYSTEM updater offline.
         New-Item -ItemType Directory -Path (Join-Path $stage 'runtime') -Force -ErrorAction Stop | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $stage 'bin') -Force -ErrorAction Stop | Out-Null
-        foreach ($file in @('remote-update.mjs','origin-auth.mjs','Run-KTKUpdater.mjs')) {
+        foreach ($file in @('remote-update.mjs','pc-maintenance.mjs','origin-auth.mjs','Run-KTKUpdater.mjs')) {
             Copy-Item -LiteralPath (Join-Path $source ('runtime\' + $file)) -Destination (Join-Path $stage ('runtime\' + $file)) -ErrorAction Stop
         }
         Copy-Item -LiteralPath (Join-Path $source 'bin\node.exe') -Destination (Join-Path $stage 'bin\node.exe') -ErrorAction Stop
@@ -102,7 +102,7 @@ $activated = $false
 try {
     New-Item -ItemType Directory -Path (Join-Path $stage 'runtime') -Force -ErrorAction Stop | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $stage 'bin') -Force -ErrorAction Stop | Out-Null
-    foreach ($file in @('remote-update.mjs','origin-auth.mjs','Run-KTKUpdater.mjs')) {
+    foreach ($file in @('remote-update.mjs','pc-maintenance.mjs','origin-auth.mjs','Run-KTKUpdater.mjs')) {
         Copy-Item -LiteralPath (Join-Path $source ('runtime\' + $file)) -Destination (Join-Path $stage ('runtime\' + $file)) -ErrorAction Stop
     }
     Copy-Item -LiteralPath (Join-Path $source 'bin\node.exe') -Destination (Join-Path $stage 'bin\node.exe') -ErrorAction Stop

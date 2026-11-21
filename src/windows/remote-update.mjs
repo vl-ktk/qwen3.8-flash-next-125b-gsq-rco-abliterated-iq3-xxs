@@ -1,10 +1,12 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, writeFile, lstat, rename, unlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { createOriginVerifier, decodeGatewayKey } from "./origin-auth.mjs";
+import { createPcMaintenanceController, createWindowsTunnelAdapter,
+  validateMaintenancePreview, validateMaintenanceApply } from "./pc-maintenance.mjs";
 
 const exec = promisify(execFile);
 const VERSION = /^0\.18\.[1-9]\d{0,3}$/;
@@ -63,14 +65,19 @@ export function signUpdateRequest(keyText, method, route, body = "", now = Date.
 }
 
 export async function callLocalUpdater(action, offer, { keyText, fetcher = fetch, port = 18765 } = {}) {
-  if (!["update", "status", "resume"].includes(action)) fail("unknown_update_action");
+  if (!["update", "status", "resume", "maintenance_preview", "maintenance_apply", "maintenance_status"].includes(action)) fail("unknown_update_action");
   if (typeof keyText !== "string") fail("updater_not_configured");
-  const route = action === "update" ? "/v1/update" : action === "resume" ? "/v1/resume" : "/v1/status";
-  const body = action === "update" ? JSON.stringify(validateUpdateOffer(offer)) : "";
-  const method = action === "status" ? "GET" : "POST";
+  const route = ({ update: "/v1/update", status: "/v1/status", resume: "/v1/resume",
+    maintenance_preview: "/v1/maintenance/preview", maintenance_apply: "/v1/maintenance/apply",
+    maintenance_status: "/v1/maintenance/status" })[action];
+  const body = action === "update" ? JSON.stringify(validateUpdateOffer(offer)) :
+    action === "maintenance_preview" ? JSON.stringify(validateMaintenancePreview(offer)) :
+      action === "maintenance_apply" ? JSON.stringify(validateMaintenanceApply(offer)) : "";
+  const method = ["status", "maintenance_status"].includes(action) ? "GET" : "POST";
   const response = await fetcher(`http://127.0.0.1:${port}${route}`, {
     method, redirect: "error", body: body || undefined,
-    headers: signUpdateRequest(keyText, method, route, body), signal: AbortSignal.timeout(4500),
+    headers: signUpdateRequest(keyText, method, route, body),
+    signal: AbortSignal.timeout(action === "maintenance_apply" ? 45000 : action === "maintenance_preview" ? 22000 : 4500),
   }).catch(() => fail("updater_unavailable"));
   if (!response.ok) fail("updater_unavailable");
   return response.json().catch(() => fail("updater_unavailable"));
@@ -166,7 +173,8 @@ export async function applyVerifiedRelease(offer, { updaterRoot, dataRoot, downl
 
 export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1", apply = applyVerifiedRelease,
   updaterRoot, dataRoot, statusFile = path.join(dataRoot, "status.json"), initialStatus = { status: "idle" },
-  checkUser = async () => null, resumeUser = async () => ({ status: "waiting_for_login" }) } = {}) {
+  checkUser = async () => null, resumeUser = async () => ({ status: "waiting_for_login" }),
+  pcMaintenance = null } = {}) {
   if (host !== "127.0.0.1" || !Number.isInteger(port) || port < 0 || port > 65535) fail("invalid_updater_bind");
   const verify = createOriginVerifier(keyText);
   let state = initialStatus;
@@ -175,14 +183,27 @@ export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1",
     const reply = (code, data) => { res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(data)); };
     try {
       if (req.headers.host !== `127.0.0.1:${server.address().port}` || req.headers.origin) return reply(403, { error: "forbidden" });
-      if (!["/v1/update", "/v1/status", "/v1/resume"].includes(req.url)) return reply(404, { error: "not_found" });
-      const method = req.url === "/v1/status" ? "GET" : "POST";
+      if (!["/v1/update", "/v1/status", "/v1/resume", "/v1/maintenance/preview", "/v1/maintenance/apply", "/v1/maintenance/status"].includes(req.url)) return reply(404, { error: "not_found" });
+      const method = ["/v1/status", "/v1/maintenance/status"].includes(req.url) ? "GET" : "POST";
       if (req.method !== method) return reply(405, { error: "method_not_allowed" });
       let size = 0;
       const parts = [];
       for await (const chunk of req) { size += chunk.length; if (size > MAX_REQUEST) return reply(413, { error: "too_large" }); parts.push(chunk); }
       const raw = Buffer.concat(parts);
       if (!verify(req.headers, method, req.url, raw)) return reply(403, { error: "denied" });
+      if (req.url.startsWith("/v1/maintenance/")) {
+        if (!pcMaintenance) return reply(503, { error: "maintenance_not_configured" });
+        try {
+          if (req.url === "/v1/maintenance/status") {
+            if (raw.length) return reply(400, { error: "invalid_arguments" });
+            return reply(200, await pcMaintenance.status());
+          }
+          if (state.status === "running") return reply(409, { error: "maintenance_busy" });
+          const payload = JSON.parse(raw.toString("utf8"));
+          if (req.url === "/v1/maintenance/preview") return reply(200, await pcMaintenance.preview(validateMaintenancePreview(payload)));
+          return reply(200, await pcMaintenance.apply(validateMaintenanceApply(payload)));
+        } catch (error) { return reply(409, { error: typeof error?.code === "string" && /^maintenance_[a-z_]+$|^ktk_service_not_trusted$/.test(error.code) ? error.code : "maintenance_unavailable" }); }
+      }
       if (method === "GET") {
         if (state.status === "user_pending") {
           const user = await checkUser().catch(() => null);
@@ -201,6 +222,7 @@ export function createUpdaterServer({ keyText, port = 18765, host = "127.0.0.1",
         return reply(202, { status: outcome?.status === "queued" ? "queued" : "waiting_for_login", version: state.version });
       }
       if (state.status === "running") return reply(409, { error: "update_running" });
+      if (pcMaintenance?.isBusy?.()) return reply(409, { error: "maintenance_busy" });
       const offer = validateUpdateOffer(JSON.parse(raw.toString("utf8")));
       // Response first: the updater might restart the caller MCP service.
       await report({ status: "running", version: offer.version });
@@ -255,6 +277,28 @@ export async function inspectFixedUserTask({ invoke = exec } = {}) {
   } catch { return null; }
 }
 
+export function createPrivateMaintenanceReceiptStore(dataRoot, { read = readFile, info = lstat,
+  write = writeFile, move = rename, remove = unlink } = {}) {
+  const file = path.join(dataRoot, "maintenance-receipt.json");
+  return {
+    async readReceipt() {
+      try {
+        const meta = await info(file);
+        if (!meta.isFile() || meta.isSymbolicLink() || meta.size > 2048) fail("maintenance_receipt_invalid");
+        return JSON.parse(await read(file, "utf8"));
+      } catch (error) {
+        if (error?.code === "ENOENT") return null;
+        fail("maintenance_receipt_invalid");
+      }
+    },
+    async writeReceipt(receipt) {
+      const temp = path.join(dataRoot, `maintenance-receipt-${randomBytes(16).toString("hex")}.tmp`);
+      await write(temp, JSON.stringify(receipt), { flag: "wx", mode: 0o600 });
+      try { await move(temp, file); } catch { await remove(temp).catch(() => {}); fail("maintenance_receipt_write_failed"); }
+    },
+  };
+}
+
 export async function runUpdaterService() {
   if (process.platform !== "win32" || process.arch !== "x64") fail("windows_updater_only");
   const updaterRoot = path.win32.join(process.env.ProgramFiles ?? "C:\\Program Files", "KTK", "Updater");
@@ -266,8 +310,10 @@ export async function runUpdaterService() {
   if (!initialStatus || typeof initialStatus !== "object" || !["idle", "failed", "updated", "user_pending", "user_failed"].includes(initialStatus.status)) {
     initialStatus = { status: "failed", code: "updater_interrupted" };
   }
+  const tunnelAdapter = createWindowsTunnelAdapter();
+  const pcMaintenance = createPcMaintenanceController({ ...tunnelAdapter, ...createPrivateMaintenanceReceiptStore(dataRoot) });
   const server = createUpdaterServer({ keyText, updaterRoot, dataRoot, initialStatus,
-    checkUser: inspectFixedUserTask, resumeUser: runFixedUserTask });
+    checkUser: inspectFixedUserTask, resumeUser: runFixedUserTask, pcMaintenance });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(18765, "127.0.0.1", resolve); });
   process.stdout.write("KTK update service ready on loopback\n");
 }

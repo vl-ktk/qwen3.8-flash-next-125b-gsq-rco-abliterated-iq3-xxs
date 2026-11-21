@@ -189,6 +189,29 @@ test("KTK update requires dedicated OAuth scope and gateway-owned release metada
   assert.equal(JSON.parse(f.calls[1].body).params.name, "update_resume");
 });
 
+test("privileged PC maintenance requires its own OAuth scope, never merely read or update rights", async t => {
+  const f = await fixture(t);
+  const read = await f.login();
+  const update = await f.login({ scope: "qwen:read qwen:update" });
+  const maintenance = await f.login({ scope: "qwen:read qwen:maintenance" });
+  const confirmation = "CONFIRM KTK MAINTENANCE " + "a".repeat(32);
+  const mutation = { name: "pc_maintenance_apply", arguments: { plan_id: "a".repeat(32), confirmation } };
+  assert.equal((await f.mcp(read.access_token, "tools/call", mutation)).status, 403);
+  assert.equal((await f.mcp(update.access_token, "tools/call", mutation)).status, 403);
+  assert.equal((await f.mcp(maintenance.access_token, "tools/call", { name: "update_apply", arguments: { version: "0.18.6" } })).status, 403);
+  assert.equal(f.calls.length, 0);
+  for (const name of ["pc_maintenance_preview", "pc_maintenance_status"]) {
+    const response = await f.mcp(read.access_token, "tools/call", { name, arguments: name.endsWith("preview") ? { action: "start_ktk_tunnel" } : {} });
+    assert.equal(response.status, 200);
+  }
+  assert.equal(f.calls.length, 2);
+  const applied = await f.mcp(maintenance.access_token, "tools/call", mutation);
+  assert.equal(applied.status, 200, await applied.clone().text());
+  assert.deepEqual(JSON.parse(f.calls.at(-1).body).params, mutation);
+  assert.equal((await f.mcp(maintenance.access_token, "tools/call", { name: "powershell", arguments: { command: "whoami" } })).status, 403);
+  assert.equal((await f.mcp(maintenance.access_token, "tools/call", { name: "pc_maintenance_apply", arguments: { plan_id: "a".repeat(32), command: "whoami" } })).status, 400);
+});
+
 test("origin shared key is required before device attestation and MCP forwarding", async t => {
   const f = await fixture(t, { gatewayConfigured: false });
   const login = await f.login();

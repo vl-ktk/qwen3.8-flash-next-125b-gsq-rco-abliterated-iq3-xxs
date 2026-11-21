@@ -8,6 +8,7 @@ import { getAdminStatus, WINDOWS_MCP_VERSION } from "./administration.mjs";
 import { normalizePcPreflight, normalizeStorageCheck, normalizeRuntimeCheck, buildInstallationPlan } from "./model-preflight.mjs";
 import { normalizePcFullAudit, normalizePcGpuAudit, normalizePcStorageAudit, normalizePcMemoryAudit, normalizePcInstallDiagnostics, buildPcReadinessReport } from "./pc-diagnostics.mjs";
 import { callLocalUpdater, validateUpdateOffer } from "./remote-update.mjs";
+import { validateMaintenancePreview, validateMaintenanceApply } from "./pc-maintenance.mjs";
 
 const execFileAsync = promisify(execFile);
 const MAX_READ = 32 * 1024;
@@ -260,7 +261,7 @@ try {
 function validate(name, args) {
   if (!isRecord(args)) throw safeError("invalid_arguments");
   const keys = Object.keys(args);
-  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_storage_mapping", "pc_memory_audit", "pc_install_diagnostics", "pc_user_task_status", "pc_readiness_report", "update_status", "update_resume"].includes(name)) {
+  if (["system_info", "system_monitor", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_storage_mapping", "pc_memory_audit", "pc_install_diagnostics", "pc_user_task_status", "pc_readiness_report", "pc_maintenance_status", "update_status", "update_resume"].includes(name)) {
     if (keys.length) throw safeError("invalid_arguments");
     return {};
   }
@@ -279,6 +280,8 @@ function validate(name, args) {
     return { path: args.path };
   }
   if (name === "update_apply") return validateUpdateOffer(args);
+  if (name === "pc_maintenance_preview") return validateMaintenancePreview(args);
+  if (name === "pc_maintenance_apply") return validateMaintenanceApply(args);
   throw safeError("unknown_tool");
 }
 
@@ -370,6 +373,21 @@ const DEFINITIONS = Object.freeze({
     name: "pc_readiness_report", description: "Combine fresh read-only Windows 11, NVIDIA, NVMe, RAM and KTK diagnostics into blockers, next actions and unknowns. No model download or execution.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
+  pc_maintenance_preview: {
+    name: "pc_maintenance_preview", description: "Read-only preview of EXACT KTK Tunnel service start or rollback, including state, risk, a one-use owner chat confirmation and zero freed RAM. No prompt or action on the PC.",
+    inputSchema: { type: "object", properties: { action: { type: "string", enum: ["start_ktk_tunnel", "rollback_ktk_tunnel"] } }, required: ["action"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false },
+  },
+  pc_maintenance_apply: {
+    name: "pc_maintenance_apply", description: "Apply one recently previewed KTK Tunnel service operation after separate explicit OWNER confirmation in chat. Executes through privileged, allowlisted SYSTEM updater; NO local PC approvals. Never accepts commands, arbitrary paths or model actions.",
+    inputSchema: { type: "object", properties: { plan_id: { type: "string", pattern: "^[a-f0-9]{32}$" }, confirmation: { type: "string", pattern: "^CONFIRM KTK MAINTENANCE [a-f0-9]{32}$" } }, required: ["plan_id", "confirmation"], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
+  pc_maintenance_status: {
+    name: "pc_maintenance_status", description: "Read KTK-only maintenance receipt status and whether a verified one-step tunnel rollback is available. No PC modifications.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
   process_list: {
     name: "process_list", description: "List at most 50 Windows processes (optional exact process name). No command lines or secrets.",
     inputSchema: { type: "object", properties: {
@@ -434,7 +452,7 @@ async function readAllowedFile(filePath, roots) {
 export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQuery = runPowerShellQuery, readNvidia = queryNvidiaGpus, identityConfigured = false,
   updater = callLocalUpdater, updaterKey = null } = {}) {
   if (!Array.isArray(allowedFileRoots) || allowedFileRoots.some(root => typeof root !== "string" || !path.isAbsolute(root))) throw safeError("invalid_file_roots");
-  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", ...(updaterKey ? ["update_status", "update_apply", "update_resume"] : []), ...(allowedFileRoots.length ? ["file_read"] : [])];
+  const available = ["system_info", "system_monitor", "process_list", "service_status", "app_status", "admin_status", "pc_preflight", "storage_check", "runtime_check", "installation_plan", "pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics", "pc_readiness_report", ...(updaterKey ? ["pc_maintenance_preview", "pc_maintenance_apply", "pc_maintenance_status", "update_status", "update_apply", "update_resume"] : []), ...(allowedFileRoots.length ? ["file_read"] : [])];
   const safeGpu = async () => {
     try { return await readNvidia(); } catch { return { status: "unavailable", reason: "gpu_inventory_failed", gpus: [] }; }
   };
@@ -477,6 +495,11 @@ export function createWindowsToolRegistry({ allowedFileRoots = [], runWindowsQue
       if (["update_status", "update_apply", "update_resume"].includes(name)) {
         if (!updaterKey) throw safeError("updater_not_configured");
         return updater(name === "update_apply" ? "update" : name === "update_resume" ? "resume" : "status", params, { keyText: updaterKey });
+      }
+      if (["pc_maintenance_preview", "pc_maintenance_apply", "pc_maintenance_status"].includes(name)) {
+        if (!updaterKey) throw safeError("maintenance_not_configured");
+        const action = name === "pc_maintenance_preview" ? "maintenance_preview" : name === "pc_maintenance_apply" ? "maintenance_apply" : "maintenance_status";
+        return updater(action, params, { keyText: updaterKey });
       }
       if (name === "admin_status") return getAdminStatus({
         paired: identityConfigured,
