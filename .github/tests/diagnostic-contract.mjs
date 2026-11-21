@@ -20,7 +20,9 @@ if (process.argv[2] === "--scripts") {
   if (process.platform !== "win32") throw Error("diagnostic_smoke_requires_windows");
   const registry = createWindowsToolRegistry();
   for (const name of names) {
-    const data = await registry.call(name, {});
+    let data;
+    try { data = await registry.call(name, {}); }
+    catch (error) { throw Error(`${name} smoke failed with ${error?.code ?? "unknown_failure"}`); }
     assert.ok(["observed", "incomplete"].includes(data.status), `Unexpected diagnostic result for ${name}`);
   }
   const readiness = await registry.call("pc_readiness_report", {});

@@ -149,10 +149,11 @@ test("Windows 11 diagnostic queries are static, bounded and read-only even when 
       assert.match(script, /KTK\\Updater\\status\.json/);
     }
     assert.equal(opts.shell, false);
-    assert.equal(opts.timeout, 18000);
+    assert.equal(opts.timeout, 30000);
     assert.equal(opts.maxBuffer, 40960);
     assert.deepEqual(JSON.parse(Buffer.from(opts.env.QWEN_MCP_ARGS_B64, "base64").toString("utf8")), {});
-    assert.deepEqual(Object.keys(opts.env).sort(), ["COMPUTERNAME", "PSModulePath", "QWEN_MCP_ARGS_B64", "SystemRoot", "WINDIR"].sort());
+    assert.deepEqual(Object.keys(opts.env).sort(), ["COMPUTERNAME", "PSModulePath", "QWEN_MCP_ARGS_B64", "SystemRoot", "WINDIR", "ProgramFiles", "ProgramData", "PATH"].sort());
+    assert.equal(opts.env.PATH, "C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\WindowsPowerShell\\v1.0");
     await assert.rejects(() => runPowerShellQuery(name, {}, { platform: "linux" }), /windows_unavailable/);
   }
 });

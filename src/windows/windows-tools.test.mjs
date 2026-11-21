@@ -109,7 +109,7 @@ test("PowerShell uses static -EncodedCommand, isolated environment, no shell and
   assert.equal(options.timeout, 8000);
   assert.equal(options.maxBuffer, 40960);
   assert.deepEqual(JSON.parse(Buffer.from(options.env.QWEN_MCP_ARGS_B64, "base64").toString("utf8")), { name: payload });
-  for (const key of Object.keys(options.env)) assert.ok(["SystemRoot", "WINDIR", "PSModulePath", "COMPUTERNAME", "QWEN_MCP_ARGS_B64"].includes(key));
+  for (const key of Object.keys(options.env)) assert.ok(["SystemRoot", "WINDIR", "PSModulePath", "COMPUTERNAME", "QWEN_MCP_ARGS_B64", "ProgramFiles", "ProgramData", "PATH"].includes(key));
 });
 
 test("PowerShell failure and malformed output do not disclose stderr or command", async () => {

@@ -288,12 +288,15 @@ export async function runPowerShellQuery(name, args, { platform = process.platfo
     WINDIR: process.env.WINDIR ?? systemRoot,
     PSModulePath: process.env.PSModulePath ?? "",
     COMPUTERNAME: process.env.COMPUTERNAME ?? "",
+    ProgramFiles: process.env.ProgramFiles ?? path.win32.join(path.win32.parse(systemRoot).root, "Program Files"),
+    ProgramData: process.env.ProgramData ?? path.win32.join(path.win32.parse(systemRoot).root, "ProgramData"),
+    PATH: [path.win32.join(systemRoot, "System32"), systemRoot, path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0")].join(";"),
     QWEN_MCP_ARGS_B64: Buffer.from(JSON.stringify(args), "utf8").toString("base64"),
   };
   let result;
   try {
     result = await invoke(exe, ["-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", script], {
-      windowsHide: true, shell: false, timeout: name === "system_monitor" ? 12000 : ["pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics"].includes(name) ? 18000 : 8000, maxBuffer: MAX_TEXT, encoding: "utf8", env,
+      windowsHide: true, shell: false, timeout: name === "system_monitor" ? 12000 : ["pc_full_audit", "pc_gpu_audit", "pc_storage_audit", "pc_memory_audit", "pc_install_diagnostics"].includes(name) ? 30000 : 8000, maxBuffer: MAX_TEXT, encoding: "utf8", env,
     });
   } catch { throw safeError("powershell_unavailable"); }
   if (typeof result.stdout !== "string" || Buffer.byteLength(result.stdout, "utf8") > MAX_TEXT) throw safeError("powershell_unavailable");
