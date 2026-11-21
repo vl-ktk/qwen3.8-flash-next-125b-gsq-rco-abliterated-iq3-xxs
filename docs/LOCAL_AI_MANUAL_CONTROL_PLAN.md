@@ -1,6 +1,6 @@
 # План завершения локальной Qwen 125B и ручного управления RAM/VRAM
 
-**Согласовано владельцем:** 21.11.2026. **Статус:** этап 1 (read-only MCP-аудит) закрыт; код разрешённых операций этапа 2 расширен в кандидате `0.18.19`, локальные проверки завершены, Windows CI/публикация нового исходника ожидаются. Ранее частичный этап 2 (`0.18.18`, 217/217 Node, 6/6 Windows CI, Edge OAuth PASS) уже в `main` через PR #67. Этапы 3–8 и live-проверка ПК друга не выполнены.
+**Согласовано владельцем:** 21.11.2026. **Статус:** этапы **1 и 2 закрыты в исходниках и офлайн CI**, не на реальном ПК друга. Этап 2 опубликован в исходнике через [PR #68](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/pull/68), `main` `dd766b64982a70919281489e3df55ef28a6a6133`, rollback SHA `9bc5f16706faf820478285d4cce18c997d26ac5b`, TEST-UNSIGNED кандидат `0.18.19` (224/224 Node, [Windows CI 6/6](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44886458777), [Edge OAuth PASS](https://github.com/vl-ktk/qwen3.8-flash-next-125b-gsq-rco-abliterated-iq3-xxs/actions/runs/44886458788)). GitHub Release/production и установленный MCP не обновлены. Этапы 3–8 и live-проверка ПК друга не выполнены.
 **Канонический исходник:** этот GitHub-репозиторий, ветка `main`.
 **Область:** Windows KTK MCP + пользовательский Strata + модель SC117 IQ3_XXS на ПК друга под **Windows 11** (уточнение владельца 21.11.2026). Никаких правок production/ПК/секретов самим этим планом.
 
@@ -71,6 +71,8 @@
 - [x] Диагностика и разрешённые операции не получают от ChatGPT shell, произвольные URL/пути/названия чужих служб/процессов/секреты. KTK allowlist, protected receipt, отдельный scope, HMAC, короткие timeouts и тесты негативных сценариев.
 
 **Критерий этапа 2:** безопасный preview→apply→verify→rollback для каждой **реально разрешённой KTK-операции**, отказ на чужих данных и подтверждённая Windows CI. Реальный ПК друга не тестировался; это будет отдельно на этапе 7–8 после остальных работ.
+
+**Приёмка этапа 2 в исходниках: PASS (21.11.2026).** `[x]` для всех пяти зафиксированных пар; полный `npm test` **224/224 PASS**, `npm run check`, `npm run check:local-ai`, `git diff --check` PASS, Windows CI #61 **6/6 SUCCESS** (Windows SCM, SYSTEM updater, offline Setup EXE), Edge OAuth #210 **SUCCESS**. Первый Windows CI #60 был красным из-за case-insensitive конфликта двух тестовых папок (`EEXIST`), исправлен и **не засчитывался**. Нет новых GitHub Release, Windows live update или доступа к ПК друга. Переход к этапу 3 — **только разработка и тесты**, не фактический запуск модели.
 
 ### Этап 3. MCP-инструменты **установки и ремонта Strata + SC117**
 
